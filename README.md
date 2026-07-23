@@ -283,12 +283,12 @@ The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more f
 
 | Goal | Suggested knobs | Expect |
 |------|-----------------|--------|
-| Proven DSpark band | `MAX_MODEL_LEN=100000`, pin **8 GiB** | Boots; measured ~18 / ~6 tok/s (structured / mixed) @ K=7 on this stack |
+| Proven DSpark band | `MAX_MODEL_LEN=100000`, pin **8 GiB** | Boots; about **~20 tok/s** decode on this stack |
 | Long but stable | **120–150k**, pin 8 GiB (or 6 GiB if capture dies) | Best practical long-ctx + DSpark |
 | Stretch | ~180k | Maybe; stop `earlyoom` first |
 | MTP-class max (~248k) | — | **Not recommended** with DSpark — use MTP for max context |
 
-On this AQLM+TP3 stack, **MTP usually wins balanced c1**; DSpark can match structured speed at higher K but mixed acceptance often collapses. Prefer DSpark to try the Sparkulator draft; prefer MTP for max context and steadier mixed decode.
+DSpark is optional for draft experiments; prefer **MTP** for the default **~248k** max-context recipe (memory headroom).
 
 ```bash
 # example: DSpark @ 150k (safer long-ctx try)
