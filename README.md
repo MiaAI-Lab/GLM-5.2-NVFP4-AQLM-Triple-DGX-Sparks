@@ -4,6 +4,12 @@ Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM
 
 This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm_hybrid` path and TP3 head/MoE padding (`VLLM_GLM_TP_PAD`).
 
+<p>
+<a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer"><img height="36" style="height:36px;border:0;vertical-align:middle;" src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" /></a>
+&nbsp;&nbsp;&nbsp;&nbsp;
+<a href="https://ko-fi.com/Z8Z3SPLOD" target="_blank" rel="noopener noreferrer"><img height="36" style="height:36px;border:0;vertical-align:middle;" src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Buy Me a Coffee at ko-fi.com" /></a>
+</p>
+
 ## Results (measured on a live 3× Spark rig)
 
 Default max-context serve (MTP, not DSpark):
