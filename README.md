@@ -25,7 +25,7 @@ Warm single-stream decode on this AQLM+TP3 stack (content-dependent), **default 
 | | Approx. tok/s |
 |--|----------------|
 | Structured | **~20** |
-| Mixed (real interactive use) | **~15–20** |
+| Mixed (real interactive use) | **~15–19** |
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
