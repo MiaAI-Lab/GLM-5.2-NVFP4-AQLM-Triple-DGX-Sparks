@@ -364,4 +364,6 @@ Local experiment / port / handoff material (if present on a development checkout
 
 ## License
 
-Ops scripts in this repository: use/modify freely for your fleet. Upstream model, vLLM fork, and kernel projects keep their own licenses.
+Ops scripts and docs in this repository are released under the [MIT License](./LICENSE) (Copyright © 2026 Mia'a AI Lab).
+
+Upstream model weights, the vLLM fork, and related kernel projects keep their own licenses.

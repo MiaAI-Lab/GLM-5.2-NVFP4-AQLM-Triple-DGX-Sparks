@@ -12,6 +12,7 @@
 /*
 !.gitignore
 !README.md
+!LICENSE
 !start.sh
 !stop.sh
 !.env.example
