@@ -114,7 +114,7 @@ By default, workers link weights under `$HOME/models/hf` on the remote account.
 ## Quick start
 
 ```bash
-git clone git@github.com:MiaAI-Lab/GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks.git glm52
+git clone https://github.com/MiaAI-Lab/GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks.git glm52
 cd glm52
 cp .env.example .env
 # edit IPs, WORKER_USER, paths, fabric NICs
@@ -122,10 +122,10 @@ cp .env.example .env
 pip install --user pexpect
 
 # 1) Pull the known-good arm64/sm121 image (~39 GB) from GHCR, then distribute to workers
-#    (private package — login with a PAT that has read:packages)
-echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
+#    Package is public (anonymous pull works). Login optional (rate limits / GHCR quirks):
+# echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
 docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
-# .env already sets IMAGE to this tag; then:
+# .env.example already sets IMAGE to this tag; then:
 ./start.sh pull
 
 # Alternative: build from the vLLM fork instead of pulling
@@ -156,16 +156,16 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 | Tag | Notes |
 |-----|--------|
 | `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest` | Known-good serve image (arm64 / sm121), ~39 GB |
-| `…:pre-b4-speed` | Same digest as the live `glm52-aqlm-sm121-pre-b4-speed` tag |
+| `…:pre-b4-speed` | Same digest as `latest` / local `glm52-aqlm-sm121-pre-b4-speed` |
 | `…:20260722` | Date pin of that build |
 
-Package is **private** (matches this repo). Collaborators need `docker login ghcr.io` with a token that has `read:packages`. Set in `.env`:
+Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional. Set in `.env`:
 
 ```bash
 IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
 ```
 
-Then `./start.sh pull` copies that image to the workers (docker save/rsync/load).
+Then `./start.sh pull` copies that image to the workers (docker save/rsync/load). Default `pull` does **not** hit the registry on workers — it saves/loads from the head. Set `PULL_FROM_REGISTRY=1` only if every node can pull the same `IMAGE` ref itself.
 
 > GHCR package name still uses the older `…-248k` slug; the **git** repo is `GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks`.
 
@@ -179,7 +179,7 @@ Copy [`.env.example`](.env.example). Important knobs:
 | `WORKER_USER` | SSH user on workers (**same as head for most people**) |
 | `WORKER_PASS` | Optional password fallback for SSH/sudo |
 | `SSH_IDENTITY` | Private key path |
-| `IMAGE` | Local Docker image tag |
+| `IMAGE` | Docker image (`ghcr.io/...` or local tag) |
 | `HF_REPO` / `MODEL_DIR` | Checkpoint source and local path |
 | `TP_SIZE=3` `DCP_SIZE=1` | Keep DCP=1 on this sparse-MLA path |
 | `KV_CACHE_DTYPE` | `nvfp4_ds_mla` (max ctx) or `fp8_ds_mla` (faster decode) |

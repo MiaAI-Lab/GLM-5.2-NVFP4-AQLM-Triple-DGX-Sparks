@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 # start.sh — GLM-5.2 NVFP4+AQLM hybrid on 3× DGX Spark
 #
-# Checkpoint: jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid (~292 GB)
+# Checkpoint: jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid (~272 GB on disk)
 #   https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid
 # Serving stack (NOT stock vLLM — hybrid NVFP4+AQLM MoE loader/kernels):
 #   git clone -b glm52-sm120 https://github.com/jarrelscy/vllm-glm52-sm120
-#   docker build -f Dockerfile.glm52-sm120 -t glm52-sm120 .
+#   docker build -f Dockerfile.glm52-sm121 -t glm52-aqlm-sm121 .   # Spark arm64/sm121
 #
-# Model-card recipe is single-node TP4+DCP4+MTP on 4× RTX PRO 6000 (sm120 amd64).
-# This script remaps to 3 Sparks (TP3+DCP3, RoCE NCCL) using the bare-launch
-# flags from the card — bypassing the image PARALLEL= entrypoint (Ray multi-node).
+# Prefer the published GHCR image (public):
+#   ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
+# Upstream model-card is TP4+DCP4+MTP on 4× RTX PRO 6000 (sm120 amd64).
+# This script remaps to 3 Sparks (TP3+DCP1, RoCE NCCL) via bare-launch flags
+# (bypassing the image PARALLEL= entrypoint for Ray multi-node).
 #
 # HARD STOPS (see ./start.sh doctor):
-#   - Official Dockerfile is CUDA x86 / sm120. Sparks are aarch64 / sm121.
-#   - No published arm64 image. ./start.sh build on Spark will not yield a
-#     drop-in serving image without a port (TORCH_CUDA_ARCH_LIST + kernels).
+#   - Official upstream Dockerfile.glm52-sm120 is linux/amd64 / sm120.
+#     Sparks need Dockerfile.glm52-sm121 (or the GHCR image above).
 #   - TP3: num_attention_heads=64, n_routed_experts=256, index_n_heads=32
-#     are not divisible by 3.
+#     are not divisible by 3 — needs VLLM_GLM_TP_PAD in the fork.
 #
 # Cluster (typical): same OS user + SSH key on all 3 Sparks.
 #   head    10.0.0.1  (run start.sh here)
@@ -28,7 +29,7 @@
 #   ./start.sh                 # doctor → build/pull → download → sync → ray → serve
 #   ./start.sh serve           # same (default)
 #   ./start.sh doctor          # connectivity + prereq report
-#   ./start.sh build           # clone fork + docker build -f Dockerfile.glm52-sm120
+#   ./start.sh build           # clone fork + docker build -f Dockerfile.glm52-sm121
 #   ./start.sh pull            # distribute image head → workers (docker save/rsync/load)
 #   ./start.sh download        # hf download checkpoint onto head
 #   ./start.sh sync            # rsync weights head → both workers (local NVMe)
@@ -37,9 +38,9 @@
 #   ./start.sh ray             # Ray head + 2 workers (docker; mounts draft if ENABLE_DSPARK)
 #   ./start.sh stop            # tear down serve + ray containers
 #   ./start.sh status          # what's up
-#   ./start.sh smoke           # coherence probe against :8000
+#   ./start.sh smoke           # coherence probe against PORT (default 8888 / .env)
 #
-# Config via .env (same directory) or environment.
+# Config via .env (same directory) or environment. Recipe knobs: .env.example.
 #
 set -euo pipefail
 
@@ -106,7 +107,7 @@ DSPARK_CONTAINER_PATH="${DSPARK_CONTAINER_PATH:-/models/dspark}"
 DSPARK_SPEC_MODEL="${DSPARK_SPEC_MODEL:-$DSPARK_CONTAINER_PATH}"
 DSPARK_SPEC_TOKENS="${DSPARK_SPEC_TOKENS:-7}"
 
-IMAGE="${IMAGE:-glm52-aqlm-sm121}"
+IMAGE="${IMAGE:-ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile.glm52-sm121}"
 HEAD_CTN="${HEAD_CTN:-glm52-aqlm-head}"
 WORKER_CTN="${WORKER_CTN:-glm52-aqlm-worker}"
@@ -119,7 +120,7 @@ DCP_COMM_BACKEND="${DCP_COMM_BACKEND:-ag_rs}"
 ENABLE_MTP="${ENABLE_MTP:-0}"
 ENABLE_DSPARK="${ENABLE_DSPARK:-0}"
 
-PORT="${PORT:-8000}"
+PORT="${PORT:-8888}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.88}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
@@ -477,16 +478,18 @@ cmd_doctor() {
     img_arch=$(docker image inspect -f '{{.Architecture}}' "$IMAGE" 2>/dev/null || echo '?')
     if [[ "$img_arch" != "$host_arch" ]]; then
       err "IMAGE ARCH MISMATCH: $IMAGE is '$img_arch' but this Spark is '$host_arch'"
-      err "  Official Dockerfile.glm52-sm120 is linux/amd64 (RTX PRO 6000 / sm120)."
-      err "  Need an arm64+sm121 build of jarrelscy/vllm-glm52-sm120 — not published."
+      err "  Upstream Dockerfile.glm52-sm120 is linux/amd64 (RTX PRO 6000 / sm120)."
+      err "  On Spark: docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest"
+      err "  or ./start.sh build with Dockerfile.glm52-sm121 (arm64/sm121)."
       ok=1
     else
       info "image arch OK ($img_arch)"
     fi
   else
-    warn "image $IMAGE not present — run: ./start.sh build  (then ./start.sh pull)"
+    warn "image $IMAGE not present — docker pull it, or ./start.sh build, then ./start.sh pull"
     if [[ "$host_arch" == "arm64" ]]; then
-      info "Use ./start.sh build with Dockerfile.glm52-sm121 for native arm64/sm121"
+      info "Preferred: docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest"
+      info "Or rebuild: ./start.sh build with Dockerfile.glm52-sm121"
     fi
   fi
 
@@ -509,8 +512,8 @@ cmd_doctor() {
     warn "TP×PP=$((TP_SIZE * PP_SIZE)) but cluster has 3 GPUs — expect Ray world-size mismatch"
   fi
   info "VLLM_GLM_TP_PAD: heads 64→96, MoE I 2048→2112 (see TP3.md)"
-  warn "AQLM ≈292 GB on 3×~121 GB → ~97 GB/rank; start maxlen=$MAX_MODEL_LEN DCP=$DCP_SIZE spec=$(spec_label)"
-  warn "kv-cache-dtype MUST be fp8_ds_mla (not plain fp8)"
+  warn "AQLM ≈272 GB on disk → ~90+ GB/rank on 3×~121 GB; maxlen=$MAX_MODEL_LEN DCP=$DCP_SIZE spec=$(spec_label)"
+  warn "kv-cache-dtype: use nvfp4_ds_mla (max ctx) or fp8_ds_mla — not plain fp8"
 
   local h
   for h in "${WORKER_HOSTS[@]}"; do
