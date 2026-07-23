@@ -20,14 +20,14 @@ Default max-context serve (MTP, not DSpark):
 | Fusion | `FUSE_PASSES=ar` (`fuse_allreduce_rms`) |
 | API | `:8888` |
 
-Warm single-stream decode on this AQLM+TP3 stack (content-dependent):
+Warm single-stream decode on this AQLM+TP3 stack (content-dependent), **default 248k / `nvfp4_ds_mla` + MTP**:
 
-| Config | Structured (approx.) | Mixed (approx.) |
-|--------|----------------------|-----------------|
-| `nvfp4_ds_mla` + MTP (live 248k) | ~15–18 tok/s | **~15–20 tok/s** (real interactive use) |
-| `fp8_ds_mla` + MTP | ~18–19 tok/s | ~11–12 tok/s (earlier A/B; not the default 248k recipe) |
+| | Approx. tok/s |
+|--|----------------|
+| Structured | ~15–18 |
+| Mixed (real interactive use) | **~15–20** |
 
-Default recipe uses **`nvfp4_ds_mla`**. Prefer **`fp8_ds_mla`** only if you want to A/B decode speed vs a smaller KV pool at the same pin.
+Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
 > **Memory is tight** at 8 GiB KV (~120 GiB / 121 GiB used per node, often into swap).
 
