@@ -29,7 +29,23 @@ Warm single-stream decode on this AQLM+TP3 stack (same-session style measurement
 
 Use **`nvfp4_ds_mla`** for max context/pool; **`fp8_ds_mla`** if you prefer a bit more decode speed and can accept a smaller pool at the same pin.
 
-> **Memory is tight** at 8 GiB KV (~120 GiB / 121 GiB used per node, often into swap). Stop or relax `earlyoom` on serve nodes before FULL graph capture, or it will SIGTERM Ray workers and look like an OOM.
+> **Memory is tight** at 8 GiB KV (~120 GiB / 121 GiB used per node, often into swap).
+
+### Disable `earlyoom` (highly recommended)
+
+**Highly recommended:** disable `earlyoom` on **all three Sparks** before bring-up and while serving this stack.
+
+At 8 GiB KV the machines sit near ~1 GiB free (often into swap). `earlyoom` (especially with a low free-mem threshold and a preference for `ray` / `python` / `vllm`) will **SIGTERM Ray workers mid CUDA-graph capture**. That looks like a GPU OOM but is the host killer. This fleet only held the 8 GiB / ~248k boot reliably after `earlyoom` was stopped.
+
+```bash
+# on every node (head + both workers)
+sudo systemctl stop earlyoom
+sudo systemctl disable earlyoom   # optional: keep it off across reboots
+# verify
+pgrep -a earlyoom || echo earlyoom_stopped
+```
+
+Re-enable later only if you drop the KV pin / context a lot, or raise earlyoom’s free-memory threshold so it won’t fire during capture.
 
 ## Requirements
 
@@ -91,15 +107,22 @@ By default, workers link weights under `$HOME/models/hf` on the remote account.
 ## Quick start
 
 ```bash
-git clone <this-repo> glm52 && cd glm52
+git clone git@github.com:MiaAI-Lab/GLM-5.2-NVFP4-Triple-DGX-Sparks-248k.git glm52
+cd glm52
 cp .env.example .env
-# edit IPs, WORKER_USER, paths, IMAGE, fabric NICs
+# edit IPs, WORKER_USER, paths, fabric NICs
 
 pip install --user pexpect
 
-# 1) Build the arm64/sm121 image on the head (once), then copy to workers
-./start.sh build
+# 1) Pull the known-good arm64/sm121 image (~39 GB) from GHCR, then distribute to workers
+#    (private package — login with a PAT that has read:packages)
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
+docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
+# .env already sets IMAGE to this tag; then:
 ./start.sh pull
+
+# Alternative: build from the vLLM fork instead of pulling
+# ./start.sh build && ./start.sh pull
 
 # 2) Download + sync target weights
 ./start.sh download
@@ -119,7 +142,23 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 # UNMOUNT=1 ./stop.sh    # also drop SSHFS mounts if you used ./start.sh mount
 ```
 
-`./start.sh` / `./start.sh serve` will **doctor**, download/sync if weights are missing, **pull** the image if it is missing locally, start **Ray** (unless `SKIP_RAY=1`), then launch vLLM. It does **not** run `build` for you — build the image once first.
+`./start.sh` / `./start.sh serve` will **doctor**, download/sync if weights are missing, **pull** the image if it is missing locally, start **Ray** (unless `SKIP_RAY=1`), then launch vLLM. Prefer the **GHCR image** above; `./start.sh build` is only needed if you rebuild from source.
+
+### Docker image (GHCR)
+
+| Tag | Notes |
+|-----|--------|
+| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest` | Known-good serve image (arm64 / sm121), ~39 GB |
+| `…:pre-b4-speed` | Same digest as the live `glm52-aqlm-sm121-pre-b4-speed` tag |
+| `…:20260722` | Date pin of that build |
+
+Package is **private** (matches this repo). Collaborators need `docker login ghcr.io` with a token that has `read:packages`. Set in `.env`:
+
+```bash
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
+```
+
+Then `./start.sh pull` copies that image to the workers (docker save/rsync/load).
 
 ## Configuration (`.env`)
 
@@ -164,7 +203,7 @@ GPU KV cache size: 248,896 tokens
 Maximum concurrency for 248,000 tokens per request: 1.00x
 ```
 
-If FULL capture dies with worker SIGTERM, check `earlyoom` on workers (`systemctl stop earlyoom`) before blaming GPU OOM.
+If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl stop earlyoom` on all nodes) before blaming GPU OOM — see **Disable earlyoom** above.
 
 ### Client settings (OpenAI-compatible UIs)
 
@@ -303,7 +342,7 @@ Clone the vLLM fork separately (see `VLLM_FORK_*` in `.env`). Weights, Docker im
 - **DCP &gt; 1** — not reliable on this sparse-MLA GB10 path; keep `DCP_SIZE=1`.  
 - **Jarrelscy ~1M ctx** — needs TP4+DCP4 on 4× discrete GPUs; not this 3× DCP1 layout.  
 - **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~248k ceiling.  
-- **earlyoom** — aggressive host reclaimers will kill capture at large KV pins.
+- **earlyoom** — **highly recommended off** on all nodes for this recipe; it will kill capture at large KV pins (see above).
 
 ## Credits
 
