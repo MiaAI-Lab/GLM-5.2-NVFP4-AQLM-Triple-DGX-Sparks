@@ -1,4 +1,4 @@
-# GLM-5.2 NVFP4+AQLM on 3× DGX Spark
+# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 248k context
 
 Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) (~272 GB on disk) with [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) on **three NVIDIA DGX Spark** nodes (GB10 / sm_121 / aarch64) over RoCE.
 
