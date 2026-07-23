@@ -107,7 +107,7 @@ By default, workers link weights under `$HOME/models/hf` on the remote account.
 ## Quick start
 
 ```bash
-git clone git@github.com:MiaAI-Lab/GLM-5.2-NVFP4-Triple-DGX-Sparks-248k.git glm52
+git clone git@github.com:MiaAI-Lab/GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks.git glm52
 cd glm52
 cp .env.example .env
 # edit IPs, WORKER_USER, paths, fabric NICs
@@ -159,6 +159,8 @@ IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
 ```
 
 Then `./start.sh pull` copies that image to the workers (docker save/rsync/load).
+
+> GHCR package name still uses the older `…-248k` slug; the **git** repo is `GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks`.
 
 ## Configuration (`.env`)
 
@@ -334,7 +336,9 @@ Only the ops surface needed to run and stop the stack:
 - `.env.example`
 - this README
 
-Clone the vLLM fork separately (see `VLLM_FORK_*` in `.env`). Weights, Docker images, logs, and local `.env` stay on your machines (gitignored).
+Clone the vLLM fork separately (see `VLLM_FORK_*` in `.env`), or pull the GHCR image. Weights, Docker images, and local `.env` stay on your machines (gitignored).
+
+Local experiment / port / handoff material (if present on a development checkout) lives under **`dev/`** — see `dev/README.md`. It is **not** required to serve and is gitignored.
 
 ## Known limits
 

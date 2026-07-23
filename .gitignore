@@ -1,6 +1,14 @@
 # Whitelist: only track files required to run / stop this vLLM stack.
 # (Ignore top-level entries; do not use !*/ or nested repos like vendor/ leak in.)
 
+# Explicit local archives / runtime noise (never upload)
+/dev/
+/logs
+/logs/
+.env
+.env.*
+!.env.example
+
 /*
 !.gitignore
 !README.md
@@ -12,6 +20,6 @@
 /scripts/*
 !/scripts/remote.py
 
-# Explicit: root docs stay local (HANDOFF, PLAN, TP3, …). Only README.md is public.
+# Explicit: root docs stay local. Only README.md is public.
 *.md
 !README.md

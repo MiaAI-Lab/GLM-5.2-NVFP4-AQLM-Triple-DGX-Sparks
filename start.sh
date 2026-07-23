@@ -137,7 +137,7 @@ NCCL_BUFFSIZE="${NCCL_BUFFSIZE:-1048576}"
 
 VLLM_FORK_URL="${VLLM_FORK_URL:-https://github.com/jarrelscy/vllm-glm52-sm120}"
 VLLM_FORK_BRANCH="${VLLM_FORK_BRANCH:-glm52-sm120}"
-VLLM_FORK_DIR="${VLLM_FORK_DIR:-$ROOT/vendor/vllm-glm52-sm120}"
+VLLM_FORK_DIR="${VLLM_FORK_DIR:-$ROOT/dev/vendor/vllm-glm52-sm120}"
 
 SERVE_LOG="${SERVE_LOG:-$ROOT/logs/glm52-aqlm.log}"
 PID_FILE="${PID_FILE:-$ROOT/logs/glm52-aqlm.pid}"
