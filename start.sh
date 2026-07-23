@@ -93,6 +93,8 @@ NCCL_GRAPH_MIXING_SUPPORT="${NCCL_GRAPH_MIXING_SUPPORT:-1}"
 SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}"
 
 HF_REPO="${HF_REPO:-jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid}"
+# Pin text-only hybrid (pre vision-graft Glm5v). Override to main/vision only with a vision-capable image.
+HF_REVISION="${HF_REVISION:-2d2ee496fbbe81222789bc8828a770241d2ffa2b}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/hf/GLM-5.2-NVFP4-AQLM-hybrid}"
 COMMON_MODEL="${COMMON_MODEL:-/var/tmp/glm52-aqlm}"
 WORKER_MODEL_LOCAL="${WORKER_MODEL_LOCAL:-models/hf/GLM-5.2-NVFP4-AQLM-hybrid}"
@@ -644,7 +646,7 @@ cmd_pull() {
 }
 
 cmd_download() {
-  info "=== download $HF_REPO → $MODEL_DIR ==="
+  info "=== download $HF_REPO @$HF_REVISION → $MODEL_DIR ==="
   mkdir -p "$MODEL_DIR"
   if [[ -f "$MODEL_DIR/config.json" && -f "$MODEL_DIR/model.safetensors.index.json" ]]; then
     local n
@@ -653,11 +655,11 @@ cmd_download() {
       info "checkpoint already present ($n safetensors) — skip download"
     else
       warn "partial download ($n shards) — resuming"
-      hf download "$HF_REPO" --local-dir "$MODEL_DIR"
+      hf download "$HF_REPO" --revision "$HF_REVISION" --local-dir "$MODEL_DIR"
     fi
   else
     command -v hf >/dev/null || die "hf CLI missing (pip install -U huggingface_hub)"
-    hf download "$HF_REPO" --local-dir "$MODEL_DIR"
+    hf download "$HF_REPO" --revision "$HF_REVISION" --local-dir "$MODEL_DIR"
   fi
   [[ -f "$MODEL_DIR/config.json" ]] || die "download incomplete: no config.json"
   local n
