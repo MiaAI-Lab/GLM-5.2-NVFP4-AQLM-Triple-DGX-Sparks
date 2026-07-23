@@ -226,7 +226,7 @@ Point the client at the head API and match the serve recipe:
 | Model id | `glm-5.2` | `SERVED_MODEL_NAME` |
 | API key | any non-empty string (e.g. `dummy`) | Auth is off on this stack |
 | Context window | **248000** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool) |
-| Max output tokens | **131072** | Keep `prompt + max_tokens ≤ 248000`; thinking counts toward this budget |
+| Max output tokens | **248000** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 248000`; thinking counts toward this budget |
 | Reasoning / thinking | on if the client supports it | Thinking tokens count toward the **output** budget |
 
 Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
@@ -238,7 +238,7 @@ Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
   "reasoning": true,
   "input": ["text"],
   "contextWindow": 248000,
-          "maxTokens": 131072,
+  "maxTokens": 248000,
   "compat": {
     "supportsDeveloperRole": false,
     "supportsReasoningEffort": false,
