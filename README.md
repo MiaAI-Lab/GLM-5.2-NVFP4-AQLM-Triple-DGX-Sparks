@@ -332,7 +332,7 @@ MAX_NUM_SEQS=1
 | `./start.sh serve` | Launch `vllm serve` in the head container (default if no args) |
 | `./start.sh status` | What’s running |
 | `./start.sh smoke` | Short coherence probe against `PORT` |
-| `./stop.sh` | Tear down serve + Ray containers |
+| `./stop.sh` | Tear down serve + Ray containers (`UNMOUNT=1` also drops SSHFS mounts) |
 
 ## What is in this repo
 
