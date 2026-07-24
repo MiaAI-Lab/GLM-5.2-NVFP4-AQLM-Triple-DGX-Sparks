@@ -1,4 +1,4 @@
-# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 248k context
+# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
@@ -19,9 +19,9 @@ Default max-context serve (MTP, not DSpark):
 |--------|--------|
 | Parallelism | TP3 · DCP1 · PP1 |
 | KV dtype | `nvfp4_ds_mla` |
-| KV pin | **8 GiB** (`KV_CACHE_MEMORY_BYTES=8589934592`) |
-| KV pool | **257,791 tokens** |
-| Max context (1 session) | **`max_model_len=248000`** (~1.04× concurrency) |
+| KV pin | **12 GiB** (`KV_CACHE_MEMORY_BYTES=12884901888`) |
+| KV pool | **386,688 tokens** |
+| Max context (1 session) | **`max_model_len=380928`** (~1.02× concurrency) |
 | Spec decode | MTP-3 (in-checkpoint) |
 | CUDA graphs | FULL · capture `[4,8,12,16,20,24]` |
 | Fusion | `FUSE_PASSES=ar,norm` (`fuse_allreduce_rms` + `fuse_norm_quant`) |
@@ -30,7 +30,7 @@ Default max-context serve (MTP, not DSpark):
 | Indexer | `HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}` |
 | API | `:8888` |
 
-Warm single-stream decode on this AQLM+TP3 stack (content-dependent), **default 248k / `nvfp4_ds_mla` + MTP**:
+Warm single-stream decode on this AQLM+TP3 stack (content-dependent), **default 380k / `nvfp4_ds_mla` + MTP**:
 
 | | Approx. tok/s |
 |--|----------------|
@@ -39,13 +39,13 @@ Warm single-stream decode on this AQLM+TP3 stack (content-dependent), **default 
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
-> **Memory is tight** at 8 GiB KV (~120 GiB / 121 GiB used per node, often into swap).
+> **Memory is tight** at 12 GiB KV (~120 GiB / 121 GiB used per node, often into swap). KV pool scales with the pin at ~33 KB/token (~32k tokens per GiB); 12 GiB is about the ceiling on 121 GiB nodes — do not raise the pin further without freeing memory first.
 
 ### Disable `earlyoom` (highly recommended)
 
 **Highly recommended:** disable `earlyoom` on **all three Sparks** before bring-up and while serving this stack.
 
-At 8 GiB KV the machines sit near ~1 GiB free (often into swap). `earlyoom` (especially with a low free-mem threshold and a preference for `ray` / `python` / `vllm`) will **SIGTERM Ray workers mid CUDA-graph capture**. That looks like a GPU OOM but is the host killer. This fleet only held the 8 GiB / ~248k boot reliably after `earlyoom` was stopped.
+At 12 GiB KV the machines sit near ~1 GiB free (often into swap). `earlyoom` (especially with a low free-mem threshold and a preference for `ray` / `python` / `vllm`) will **SIGTERM Ray workers mid CUDA-graph capture**. That looks like a GPU OOM but is the host killer. This fleet only held the 12 GiB / ~380k boot reliably after `earlyoom` was stopped.
 
 ```bash
 # on every node (head + both workers)
@@ -62,7 +62,7 @@ Re-enable later only if you drop the KV pin / context a lot, or raise earlyoom�
 - **3× DGX Spark** with Docker + NVIDIA Container Toolkit  
 - RoCE / ConnectX fabric between nodes (Socket/TCP fallback possible but slower)  
 - SSH from the head node to both workers  
-- **≥ ~280 GB free NVMe per node** for the target checkpoint (plus draft if using DSpark)  
+- **≥ ~280 GB free NVMe per node** for the target checkpoint (plus draft if using DSpark)  
 - Python 3 with `pexpect` on the head (`pip install pexpect`)  
 - Hugging Face CLI / token to download the checkpoint  
 - NCCL **≥ 2.30.7** on the host is strongly recommended for FULL graphs + TP on GB10+CX7 (mount via `NCCL_HOST_DIR`)
@@ -164,7 +164,7 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
 Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional.
 
-> **2026-07-24:** `:latest` is now the baked build — the recipe numbers above (fp8 W8A16, pad 66, lane-rows, SwiGLU-fused w13, `index_topk_freq=8`, pool 257,791) work out of the box, no post-deploy patching. On the older `:20260722`/`pre-b4-speed` build, expect the previous recipe (pad 96, no fp8 W8A16, pool 248,896) unless the fork re-apply list is applied.
+> **2026-07-24:** `:latest` is now the baked build — the recipe numbers above (fp8 W8A16, pad 66, lane-rows, SwiGLU-fused w13, `index_topk_freq=8`, pool 386,688) work out of the box, no post-deploy patching. On the older `:20260722`/`pre-b4-speed` build, expect the previous recipe (pad 96, no fp8 W8A16, pool 248,896) unless the fork re-apply list is applied.
 
 Set in `.env`:
 
@@ -190,7 +190,7 @@ Copy [`.env.example`](.env.example). Important knobs:
 | `HF_REPO` / `MODEL_DIR` | Checkpoint source and local path |
 | `TP_SIZE=3` `DCP_SIZE=1` | Keep DCP=1 on this sparse-MLA path |
 | `KV_CACHE_DTYPE` | `nvfp4_ds_mla` (max ctx) or `fp8_ds_mla` (faster decode) |
-| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (e.g. `8589934592` = 8 GiB) |
+| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (e.g. `12884901888` = 12 GiB) |
 | `MAX_MODEL_LEN` | Per-request context cap; set ≈ pool size for 1× concurrency |
 | `ENABLE_MTP` / `MTP_SPEC_TOKENS` | In-checkpoint MTP speculative decode (default path) |
 | `ENABLE_DSPARK` / `DSPARK_*` | External DSpark draft (see below); mutually exclusive with MTP |
@@ -202,8 +202,8 @@ Copy [`.env.example`](.env.example). Important knobs:
 
 ```bash
 KV_CACHE_DTYPE=nvfp4_ds_mla
-KV_CACHE_MEMORY_BYTES=8589934592   # 8 GiB
-MAX_MODEL_LEN=248000              # pool now exceeds it (~1.04×)
+KV_CACHE_MEMORY_BYTES=12884901888   # 12 GiB
+MAX_MODEL_LEN=380928              # pool now exceeds it (~1.02×)
 MAX_NUM_SEQS=1
 ENABLE_MTP=1
 ENABLE_DSPARK=0
@@ -217,8 +217,8 @@ HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}
 After boot, confirm:
 
 ```text
-GPU KV cache size: 257,791 tokens
-Maximum concurrency for 248,000 tokens per request: 1.04x
+GPU KV cache size: 386,688 tokens
+Maximum concurrency for 380,928 tokens per request: 1.02x
 ```
 
 If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl stop earlyoom` on all nodes) before blaming GPU OOM — see **Disable earlyoom** above.
@@ -234,8 +234,8 @@ Point the client at the head API and match the serve recipe:
 | Base URL | `http://<head-ip>:8888/v1` | OpenAI-compatible; `PORT` from `.env` |
 | Model id | `glm-5.2` | `SERVED_MODEL_NAME` |
 | API key | any non-empty string (e.g. `dummy`) | Auth is off on this stack |
-| Context window | **248000** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool) |
-| Max output tokens | **248000** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 248000`; thinking counts toward this budget |
+| Context window | **380928** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool) |
+| Max output tokens | **380928** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 380928`; thinking counts toward this budget |
 | Reasoning / thinking | on if the client supports it | Thinking tokens count toward the **output** budget |
 
 Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
@@ -243,11 +243,11 @@ Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
 ```json
 {
   "id": "glm-5.2",
-  "name": "GLM 5.2 NVFP4+AQLM TP3 MTP · 248k",
+  "name": "GLM 5.2 NVFP4+AQLM TP3 MTP · 380k",
   "reasoning": true,
   "input": ["text"],
-  "contextWindow": 248000,
-  "maxTokens": 248000,
+  "contextWindow": 380928,
+  "maxTokens": 380928,
   "compat": {
     "supportsDeveloperRole": false,
     "supportsReasoningEffort": false,
@@ -299,16 +299,16 @@ Changing `ENABLE_DSPARK` requires a fresh `./start.sh ray` (volume flags are set
 
 #### Context constraints with DSpark
 
-The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for the RedHat preview) on top of the target. At the MTP max-context envelope (~120 GiB / 121 GiB used, often swapping), that headroom is mostly gone.
+The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for the RedHat preview) on top of the target. At the MTP max-context envelope (~120 GiB / 121 GiB used, often swapping), that headroom is mostly gone. **Lower the KV pin back to ~8 GiB when running DSpark** (the 12 GiB / 380k pin leaves no room for the draft).
 
 | Goal | Suggested knobs | Expect |
 |------|-----------------|--------|
 | Proven DSpark band | `MAX_MODEL_LEN=100000`, pin **8 GiB** | Boots; about **~20 tok/s** decode on this stack |
 | Long but stable | **120–150k**, pin 8 GiB (or 6 GiB if capture dies) | Best practical long-ctx + DSpark |
 | Stretch | ~180k | Maybe; stop `earlyoom` first |
-| MTP-class max (~248k) | — | **Not recommended** with DSpark — use MTP for max context |
+| MTP-class max (~380k) | — | **Not recommended** with DSpark — use MTP for max context |
 
-DSpark is optional for draft experiments; prefer **MTP** for the default **~248k** max-context recipe (memory headroom).
+DSpark is optional for draft experiments; prefer **MTP** for the default **~380k** max-context recipe (memory headroom).
 
 **Measured on the baked image (2026-07-24, Sparkulator W4A16, K=3, 100k, same-session warm c1):** structured **20.2** / mixed **12.2** tok/s — short-context parity with MTP-3 (20.5–21.0 / 13–15). But the 26k-context probe decode collapses to **~6 tok/s vs MTP's 17.6–20.4** (~3× slower): the draft runs full dense attention over the whole context every step. Acceptance length ~2.0–3.3. Net: no speed win over MTP at any context length, plus the ctx cap — DSpark stays a draft-research path, not a serving recipe.
 
@@ -329,8 +329,8 @@ MAX_NUM_SEQS=1
 | Goal | Change |
 |------|--------|
 | More decode tok/s, less ctx | `KV_CACHE_DTYPE=fp8_ds_mla`, smaller pin / maxlen |
-| Safer RAM | 6–7 GiB pin, maxlen ≈ new pool |
-| Max context | MTP on, DSpark off, 8 GiB + ~248k (above) |
+| Safer RAM | 8–10 GiB pin, maxlen ≈ new pool |
+| Max context | MTP on, DSpark off, 12 GiB + ~380k (above) |
 | Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (not when toggling DSpark mounts) |
 
 ## Commands
@@ -367,7 +367,7 @@ Local experiment / port / handoff material (if present on a development checkout
 - **3 Sparks / TP3** — target dims are padded (**64→66 heads** via the backend-gated rule, MoE intermediate 2048→2112); the DSpark draft pads 64→96. See fork `glm_tp_pad` / `qwen3_dflash`. A 4th Spark (TP4) is a different recipe (e.g. QuantTrio Int4–Int8Mix), not a drop-in.  
 - **DCP &gt; 1** — not reliable on this sparse-MLA GB10 path; keep `DCP_SIZE=1`.  
 - **Jarrelscy ~1M ctx** — needs TP4+DCP4 on 4× discrete GPUs; not this 3× DCP1 layout.  
-- **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~248k ceiling.  
+- **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~380k ceiling.  
 - **earlyoom** — **highly recommended off** on all nodes for this recipe; it will kill capture at large KV pins (see above).
 
 ## Credits
