@@ -355,6 +355,11 @@ docker_env_args() {
   elif [[ -n "${NCCL_IB_GID_INDEX:-}" ]]; then
     _dea+=(-e "NCCL_IB_GID_INDEX=$NCCL_IB_GID_INDEX")
   fi
+  # Expert-routing stats probe (nvfp4_aqlm_hybrid): only when non-empty —
+  # an empty value would enable the collector with a bogus dir.
+  if [[ -n "${VLLM_HYBRID_EXPERT_STATS:-}" ]]; then
+    _dea+=(-e "VLLM_HYBRID_EXPERT_STATS=$VLLM_HYBRID_EXPERT_STATS")
+  fi
 }
 
 # Common docker run flags. IB device + IPC_LOCK required on Spark for RoCE.
@@ -443,6 +448,7 @@ worker_docker_env_lines() {
         -e VLLM_WORKER_MULTIPROC_METHOD=spawn \\
         -e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \\
         -e VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800} \\
+$( [[ -n "${VLLM_HYBRID_EXPERT_STATS:-}" ]] && echo "        -e VLLM_HYBRID_EXPERT_STATS=${VLLM_HYBRID_EXPERT_STATS} \\" || echo "        \\" )
         -e MODEL_DIR=/models/1m \\
 EOF
 }

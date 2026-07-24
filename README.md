@@ -20,19 +20,22 @@ Default max-context serve (MTP, not DSpark):
 | Parallelism | TP3 · DCP1 · PP1 |
 | KV dtype | `nvfp4_ds_mla` |
 | KV pin | **8 GiB** (`KV_CACHE_MEMORY_BYTES=8589934592`) |
-| KV pool | **248,896 tokens** |
-| Max context (1 session) | **`max_model_len=248000`** (~1.00× concurrency) |
+| KV pool | **257,791 tokens** |
+| Max context (1 session) | **`max_model_len=248000`** (~1.04× concurrency) |
 | Spec decode | MTP-3 (in-checkpoint) |
 | CUDA graphs | FULL · capture `[4,8,12,16,20,24]` |
-| Fusion | `FUSE_PASSES=ar` (`fuse_allreduce_rms`) |
+| Fusion | `FUSE_PASSES=ar,norm` (`fuse_allreduce_rms` + `fuse_norm_quant`) |
+| Attention/MoE | TP3 head pad **64→66** · MoE w2 lane-rows G=16 · SwiGLU-fused w13 |
+| Quant extras | fp8 W8A16 on o_proj/shared experts (`VLLM_DISABLE_FP8_W8A16=0`) |
+| Indexer | `HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}` |
 | API | `:8888` |
 
 Warm single-stream decode on this AQLM+TP3 stack (content-dependent), **default 248k / `nvfp4_ds_mla` + MTP**:
 
 | | Approx. tok/s |
 |--|----------------|
-| Structured | **~20** |
-| Mixed (real interactive use) | **~15–19** |
+| Structured | **~21** |
+| Mixed (real interactive use) | **~13–15** (boot-dependent) |
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
@@ -155,11 +158,15 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
 | Tag | Notes |
 |-----|--------|
-| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest` | Known-good serve image (arm64 / sm121), ~39 GB |
-| `…:pre-b4-speed` | Same digest as `latest` / local `glm52-aqlm-sm121-pre-b4-speed` |
-| `…:20260722` | Date pin of that build |
+| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest` | Known-good serve image (arm64 / sm121), ~39 GB — **baked 2026-07-24**: fork patches (fp8 W8A16 fix, pad-66 rule, MoE lane-rows, SwiGLU epilogue, M1/M2 hardening) + nvfp4 FlashInfer patch set included; **no post-deploy file patching needed** |
+| `…:20260724` | Date pin of the baked build |
+| `…:pre-b4-speed` / `…:20260722` | Previous build (needs the fork re-apply list for the current recipe) |
 
-Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional. Set in `.env`:
+Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional.
+
+> **2026-07-24:** `:latest` is now the baked build — the recipe numbers above (fp8 W8A16, pad 66, lane-rows, SwiGLU-fused w13, `index_topk_freq=8`, pool 257,791) work out of the box, no post-deploy patching. On the older `:20260722`/`pre-b4-speed` build, expect the previous recipe (pad 96, no fp8 W8A16, pool 248,896) unless the fork re-apply list is applied.
+
+Set in `.env`:
 
 ```bash
 IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
@@ -196,20 +203,22 @@ Copy [`.env.example`](.env.example). Important knobs:
 ```bash
 KV_CACHE_DTYPE=nvfp4_ds_mla
 KV_CACHE_MEMORY_BYTES=8589934592   # 8 GiB
-MAX_MODEL_LEN=248000              # match reported pool (~1.00×)
+MAX_MODEL_LEN=248000              # pool now exceeds it (~1.04×)
 MAX_NUM_SEQS=1
 ENABLE_MTP=1
 ENABLE_DSPARK=0
 MTP_SPEC_TOKENS=3
 CUDAGRAPH_MODE=FULL
-FUSE_PASSES=ar
+FUSE_PASSES=ar,norm
+VLLM_DISABLE_FP8_W8A16=0            # fp8 on o_proj/shared experts
+HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}
 ```
 
 After boot, confirm:
 
 ```text
-GPU KV cache size: 248,896 tokens
-Maximum concurrency for 248,000 tokens per request: 1.00x
+GPU KV cache size: 257,791 tokens
+Maximum concurrency for 248,000 tokens per request: 1.04x
 ```
 
 If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl stop earlyoom` on all nodes) before blaming GPU OOM — see **Disable earlyoom** above.
@@ -349,7 +358,7 @@ Local experiment / port / handoff material (if present on a development checkout
 
 ## Known limits
 
-- **3 Sparks / TP3** — target and DSpark draft dims are padded (64→96 heads, MoE intermediate 2048→2112, etc.); see fork `glm_tp_pad` / `qwen3_dflash`. A 4th Spark (TP4) is a different recipe (e.g. QuantTrio Int4–Int8Mix), not a drop-in.  
+- **3 Sparks / TP3** — target dims are padded (**64→66 heads** via the backend-gated rule, MoE intermediate 2048→2112); the DSpark draft pads 64→96. See fork `glm_tp_pad` / `qwen3_dflash`. A 4th Spark (TP4) is a different recipe (e.g. QuantTrio Int4–Int8Mix), not a drop-in.  
 - **DCP &gt; 1** — not reliable on this sparse-MLA GB10 path; keep `DCP_SIZE=1`.  
 - **Jarrelscy ~1M ctx** — needs TP4+DCP4 on 4× discrete GPUs; not this 3× DCP1 layout.  
 - **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~248k ceiling.  
