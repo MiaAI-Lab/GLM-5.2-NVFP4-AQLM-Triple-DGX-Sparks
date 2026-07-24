@@ -279,7 +279,11 @@ hf download sapidlabs/Sparkulator-GLM-5.2 \
 # .env
 ENABLE_DSPARK=1
 ENABLE_MTP=0
-DSPARK_SPEC_TOKENS=7
+DSPARK_SPEC_TOKENS=3       # K=3 measured best; K=7 collapsed mixed (~6 tok/s)
+# REQUIRED — no safe default. start.sh's built-in default points at the
+# RedHat bf16 preview; if the workers carry a different (e.g. W4A16
+# Sparkulator) copy, serve dies at draft load: KeyError 'fc.weight_packed'.
+# Head and workers MUST mount the same checkpoint.
 DSPARK_MODEL_DIR=$HOME/models/hf/Sparkulator-GLM-5.2
 COMMON_DSPARK=/var/tmp/glm52-dspark
 # container mount path defaults to /models/dspark
@@ -306,11 +310,13 @@ The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more f
 
 DSpark is optional for draft experiments; prefer **MTP** for the default **~248k** max-context recipe (memory headroom).
 
+**Measured on the baked image (2026-07-24, Sparkulator W4A16, K=3, 100k, same-session warm c1):** structured **20.2** / mixed **12.2** tok/s — short-context parity with MTP-3 (20.5–21.0 / 13–15). But the 26k-context probe decode collapses to **~6 tok/s vs MTP's 17.6–20.4** (~3× slower): the draft runs full dense attention over the whole context every step. Acceptance length ~2.0–3.3. Net: no speed win over MTP at any context length, plus the ctx cap — DSpark stays a draft-research path, not a serving recipe.
+
 ```bash
 # example: DSpark @ 150k (safer long-ctx try)
 ENABLE_DSPARK=1
 ENABLE_MTP=0
-DSPARK_SPEC_TOKENS=7
+DSPARK_SPEC_TOKENS=3
 DSPARK_MODEL_DIR=$HOME/models/hf/Sparkulator-GLM-5.2
 KV_CACHE_DTYPE=nvfp4_ds_mla
 KV_CACHE_MEMORY_BYTES=8589934592
