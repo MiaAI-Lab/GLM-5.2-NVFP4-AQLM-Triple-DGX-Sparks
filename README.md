@@ -262,7 +262,7 @@ If you lower `MAX_MODEL_LEN` (e.g. DSpark @ 150k), lower the client `contextWind
 
 ### DSpark speculative decode (optional)
 
-DSpark uses a **separate draft checkpoint**, not the in-checkpoint MTP block. TP3 is supported via the same `VLLM_GLM_TP_PAD` head pad (64→96) as the target. `start.sh` forces `ENABLE_MTP=0` when `ENABLE_DSPARK=1`.
+DSpark uses a **separate draft checkpoint**, not the in-checkpoint MTP block. TP3 is supported via the same `VLLM_GLM_TP_PAD` head-pad mechanism as the target (the DSpark draft pads 64→96; the target pads 64→66 via the backend-gated rule). `start.sh` forces `ENABLE_MTP=0` when `ENABLE_DSPARK=1`.
 
 **Draft weights** — point `DSPARK_MODEL_DIR` at a local directory that contains `model.safetensors`:
 
