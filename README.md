@@ -127,7 +127,7 @@ pip install --user pexpect
 # 1) Pull the known-good arm64/sm121 image (~39 GB) from GHCR, then distribute to workers
 #    Package is public (anonymous pull works). Login optional (rate limits / GHCR quirks):
 # echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
-docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
+docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest
 # .env.example already sets IMAGE to this tag; then:
 ./start.sh pull
 
@@ -158,7 +158,7 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
 | Tag | Notes |
 |-----|--------|
-| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest` | Known-good serve image (arm64 / sm121), ~39 GB — **baked 2026-07-24**: fork patches (fp8 W8A16 fix, pad-66 rule, MoE lane-rows, SwiGLU epilogue, M1/M2 hardening) + nvfp4 FlashInfer patch set included; **no post-deploy file patching needed** |
+| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest` | Known-good serve image (arm64 / sm121), ~39 GB — **baked 2026-07-24**: fork patches (fp8 W8A16 fix, pad-66 rule, MoE lane-rows, SwiGLU epilogue, M1/M2 hardening) + nvfp4 FlashInfer patch set included; **no post-deploy file patching needed** |
 | `…:20260724` | Date pin of the baked build |
 | `…:pre-b4-speed` / `…:20260722` | Previous build (needs the fork re-apply list for the current recipe) |
 
@@ -169,12 +169,10 @@ Package and git repo are **public**. Anonymous `docker pull` works; `docker logi
 Set in `.env`:
 
 ```bash
-IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest
 ```
 
 Then `./start.sh pull` copies that image to the workers (docker save/rsync/load). Default `pull` does **not** hit the registry on workers — it saves/loads from the head. Set `PULL_FROM_REGISTRY=1` only if every node can pull the same `IMAGE` ref itself.
-
-> GHCR package name still uses the older `…-248k` slug; the **git** repo is `GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks`.
 
 ## Configuration (`.env`)
 

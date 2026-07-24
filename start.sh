@@ -8,7 +8,7 @@
 #   docker build -f Dockerfile.glm52-sm121 -t glm52-aqlm-sm121 .   # Spark arm64/sm121
 #
 # Prefer the published GHCR image (public):
-#   ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest
+#   ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest
 # Upstream model-card is TP4+DCP4+MTP on 4× RTX PRO 6000 (sm120 amd64).
 # This script remaps to 3 Sparks (TP3+DCP1, RoCE NCCL) via bare-launch flags
 # (bypassing the image PARALLEL= entrypoint for Ray multi-node).
@@ -109,7 +109,7 @@ DSPARK_CONTAINER_PATH="${DSPARK_CONTAINER_PATH:-/models/dspark}"
 DSPARK_SPEC_MODEL="${DSPARK_SPEC_MODEL:-$DSPARK_CONTAINER_PATH}"
 DSPARK_SPEC_TOKENS="${DSPARK_SPEC_TOKENS:-7}"
 
-IMAGE="${IMAGE:-ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest}"
+IMAGE="${IMAGE:-ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile.glm52-sm121}"
 HEAD_CTN="${HEAD_CTN:-glm52-aqlm-head}"
 WORKER_CTN="${WORKER_CTN:-glm52-aqlm-worker}"
@@ -487,7 +487,7 @@ cmd_doctor() {
     if [[ "$img_arch" != "$host_arch" ]]; then
       err "IMAGE ARCH MISMATCH: $IMAGE is '$img_arch' but this Spark is '$host_arch'"
       err "  Upstream Dockerfile.glm52-sm120 is linux/amd64 (RTX PRO 6000 / sm120)."
-      err "  On Spark: docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest"
+      err "  On Spark: docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest"
       err "  or ./start.sh build with Dockerfile.glm52-sm121 (arm64/sm121)."
       ok=1
     else
@@ -496,7 +496,7 @@ cmd_doctor() {
   else
     warn "image $IMAGE not present — docker pull it, or ./start.sh build, then ./start.sh pull"
     if [[ "$host_arch" == "arm64" ]]; then
-      info "Preferred: docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks-248k:latest"
+      info "Preferred: docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest"
       info "Or rebuild: ./start.sh build with Dockerfile.glm52-sm121"
     fi
   fi
