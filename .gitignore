@@ -12,6 +12,7 @@
 /*
 !.gitignore
 !README.md
+!CHANGELOG.md
 !LICENSE
 !start.sh
 !stop.sh
@@ -21,6 +22,7 @@
 /scripts/*
 !/scripts/remote.py
 
-# Explicit: root docs stay local. Only README.md is public.
+# Explicit: root docs stay local. Only README.md and CHANGELOG.md are public.
 *.md
 !README.md
+!CHANGELOG.md
