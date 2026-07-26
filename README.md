@@ -1,6 +1,6 @@
 # GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context
 
-**Release v3** — k12l1 serve image (K1/K2 cold-path kernels + L1 draft capture fix): ~21 structured / ~14 mixed tok/s, 386,688-token KV pool.
+**Release v3** — k12l1 serve image (K1/K2 cold-path kernels + L1 draft capture fix): ~21 structured / ~14-19 mixed tok/s, 386,688-token KV pool.
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
@@ -39,7 +39,7 @@ Warm single-stream decode on this AQLM+TP3 stack (content-dependent), measured 2
 | | Approx. tok/s |
 |--|----------------|
 | Structured | **~21** |
-| Mixed (real interactive use) | **~14** (context-dependent) |
+| Mixed (real interactive use) | **~14-19** (context-dependent) |
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
