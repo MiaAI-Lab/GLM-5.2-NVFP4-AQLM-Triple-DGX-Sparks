@@ -1,6 +1,6 @@
-# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context
+# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context (+ optional vision)
 
-**Release v3** — k12l1 serve image (K1/K2 cold-path kernels + L1 draft capture fix): ~21 structured / ~14-19 mixed tok/s, 386,688-token KV pool.
+**Release v3** — k12l1 serve image (K1/K2 cold-path kernels + L1 draft capture fix): ~21 structured / ~14-19 mixed tok/s, 386,688-token KV pool. **v3.1:** `:latest` is now the k12l1-vision superset — optional glm5v image input at full text speed.
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
@@ -9,9 +9,9 @@
   <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
 </p>
 
-Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) (~272 GB on disk) with [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) on **three NVIDIA DGX Spark** nodes (GB10 / sm_121 / aarch64) over RoCE.
+Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) (~272 GB text + ~1 GB vision on disk) with a vision-enabled build of [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) on **three NVIDIA DGX Spark** nodes (GB10 / sm_121 / aarch64) over RoCE. **Text + optional image input**: the checkpoint's current revision adds a `glm5v` vision build (MoonViT tower + patch-merger projector grafted onto the unchanged text backbone).
 
-This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm_hybrid` path and TP3 head/MoE padding (`VLLM_GLM_TP_PAD`).
+This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm_hybrid` path and TP3 head/MoE padding (`VLLM_GLM_TP_PAD`); the vision tower additionally needs `--mm-encoder-tp-mode data` at TP3 (its 16 attention heads are not divisible by 3).
 
 ## Results (measured on a live 3× Spark rig)
 
@@ -42,6 +42,28 @@ Warm single-stream decode on this AQLM+TP3 stack (content-dependent), measured 2
 | Mixed (real interactive use) | **~14-19** (context-dependent) |
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
+
+### Vision (glm5v) — opt-in, full text speed (fixed 2026-07-26)
+
+The HF repo's current `main` is a **vision-language** build: config is a `glm5v` wrapper (`text_config` + `vision_config`). Text weights are byte-identical; only ~1 GB of new files are needed (`vision_tower.safetensors`, `mm_projector.safetensors`, `kimi_k25_*.py`, `media_utils.py`, `preprocessor_config.json`, `chat_template.jinja`). Serve it with the **`:k12l1-vision`** image (= `:latest`) — the k12l1 text image plus the glm5v wrapper **and a config-override fix** (below).
+
+Recipe deltas vs. the text-only serve:
+
+```bash
+HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca   # vision-era main; text-only pin is 2d2ee49…
+MM_ENCODER_TP_MODE=data     # REQUIRED at TP3 — else boot dies: "16 is not divisible by 3" in kimi_k25_vit.py
+KV_CACHE_MEMORY_BYTES=11811160064   # 11 GiB (was 12 GiB) — frees ~1 GiB for the replicated tower
+MAX_MODEL_LEN=348160        # was 380928 — pool is now 354,496 tokens
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision   # == :latest
+# weights dir must carry the VISION config set (config.json / chat_template.jinja /
+# model.safetensors.index.json from the vision revision)
+```
+
+**The 2026-07-25 `:vision` build was ~20% slower on text decode — root-caused and fixed.** Flat `--hf-overrides` keys land on the top-level `glm5v` wrapper config, and `num_experts_per_tok:4` never propagated to the nested `text_config` the MoE actually reads → the vision stack silently ran the MoE at **top-8 instead of top-4** (~2× routed-expert traffic; acceptance unchanged, hiding it). The fixed image adds one passthrough property. Measured on the fixed build + vision config (boot-matched, warm≥5, r1+r2): structured **21.0/20.9**, mixed **13.7/13.6**, ttft **~0.9–1.0s** — text-recipe parity. Gates: single-image smoke exact (red square / white circle), 40k long-ctx probe coherent. **Do not use the old `:20260725-vision` pin** (top-8 bug).
+
+Verified on this fleet (2026-07-26): `Multi-modal warmup completed`, KV pool 354,496 tokens, image prompts answered via both API shapes. Client-side gotchas (both bitten in practice): **mark the model vision-capable in your chat client** — clients like ZCode silently strip the attachment otherwise (`[Media omitted from provider request because the selected model does not support image input]`) and the model then truthfully says it can't see anything; and **keep the thinking budget well below `max_tokens`** — e.g. ZCode's `budget_tokens: 32000` with `max_tokens: 32001` leaves ~1 token for the reply and surfaces as "model returned no content".
+
+Switching between text and vision is a **config swap only** (same image): swap `config.json` / `chat_template.jinja` / `model.safetensors.index.json` on all 3 nodes + restart. Details: `dev/docs/GLM-5.2-Vision-report.md` + `dev/docs/GLM-5.2-Vision-Tech-Guide.md`; root-cause write-up and A/B numbers: `dev/docs/SPEED-IMPROVEMENTS.md` §0 "VISION-REGRESSION RESOLVED". Not covered here: the card's 950K + LMCache path (`UTIL=0.96`) — untested on this fleet.
 
 ### Disable `earlyoom` (highly recommended)
 
@@ -160,18 +182,20 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
 | Tag | Notes |
 |-----|--------|
-| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest` | **= `:k12l1` — use this one.** Recommended text-only image (default recipe): `20260724` + K1/K2 AQLM cold-path kernels + L1 draft size-1 capture fix, baked 2026-07-26. Best mixed tok/s; pair with the text config set + the 3 `GLM_MOE_AQLM_*` / `GLM_NVFP4_STREAM` knobs (set in `.env.example`) |
-| `…:k12l1` / `…:20260726-k12l1` | Named + date pins of the k12l1 backport (= local tag `glm52-aqlm-sm121-baked:20260724-k12l1`, digest `da18eccd…`) |
+| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest` | **= `:k12l1-vision` — use this one.** Superset image (2026-07-26, digest `f8f350d4…`): the k12l1 text recipe **plus** the glm5v vision wrapper and the `num_experts_per_tok` override fix. Serves **both** config sets — text config (wrapper dormant ≡ `:k12l1` exactly) and vision config — at full speed |
+| `…:k12l1-vision` / `…:20260726-k12l1-vision` | Named + date pins of the vision superset (= local tag `glm52-aqlm-sm121-baked:20260724-k12l1-vision`) |
+| `…:vision` | Rolling vision tag — **now = `:k12l1-vision`** (fixed). The previous 2026-07-25 build at `:20260725-vision` has the top-8 override bug (~20% slower text decode) — do not use |
+| `…:k12l1` / `…:20260726-k12l1` | Named + date pins of the text-only k12l1 backport (= local tag `glm52-aqlm-sm121-baked:20260724-k12l1`, digest `da18eccd…`). Text config only — cannot load the glm5v config |
 | `…:20260724` | Previous text-only build (2026-07-24 bake: fp8 W8A16 fix, pad-66 rule, MoE lane-rows, SwiGLU epilogue, M1/M2 hardening, nvfp4 FlashInfer patches). **Superseded by `:k12l1`** — same base minus K1/K2 + L1; kept as rollback pin |
 | `…:pre-b4-speed` / `…:20260722` | Previous build (needs the fork re-apply list for the current recipe) |
 
-> `:latest` = `:k12l1` is the default pull. `:20260724` is the previous text-only build, kept as a rollback pin.
+> `:latest` = `:k12l1-vision` is the default pull and serves text **and** vision (config swap only). `:k12l1` remains the minimal text-only pin; `:20260724` is the rollback pin.
 
 Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional.
 
 ### What's new in v3 (`:k12l1`)
 
-v3 (`:k12l1`) is the current default serve image. It is the 2026-07-24 baked image plus two kernel/graph backports developed on the serving fork’s SM121 branch — no other changes (the rest of the tree, FlashInfer, and all attention/MoE/quant code are byte-identical to `:20260724`):
+v3 (`:k12l1`) is the 2026-07-24 baked image plus two kernel/graph backports developed on the serving fork’s SM121 branch — no other changes (the rest of the tree, FlashInfer, and all attention/MoE/quant code are byte-identical to `:20260724`). **v3.1 supersedes it as the default:** `:k12l1-vision` = this same image + the glm5v wrapper + the top-k override fix (text config runs byte-identical code on it):
 
 1. **K1 — AQLM cold-path gather mem-path** (`aqlm_moe_v2.cu`). The 2-bit "cold" MoE experts spend ~92% of their bus traffic on random 16B codebook gathers. K1 routes codebook gathers through L1 (`GLM_MOE_AQLM_CB=l1`) and marks the code/activation streams evict-first (`GLM_MOE_AQLM_STREAM=1`). Microbench: **w13 +2.7%, w2 +22.5% sector throughput**, bit-exact vs the shipped kernel.
 2. **K2 — evict-first on the NVFP4 hot weight stream** (`GLM_NVFP4_STREAM=1`, w13-only). Stops the ~210 MB/launch NVFP4 weight stream from evicting the 1 MB codebook from L2. Microbench: **w13 +7% sectors**, w2 flat, bit-exact.
@@ -186,8 +210,8 @@ All three are **bit-exact and env-gated** — the kernels default to the old beh
 Set in `.env` (the current fleet recipe):
 
 ```bash
-IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1
-# (== :latest; local tag glm52-aqlm-sm121-baked:20260724-k12l1 on this fleet)
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision
+# (== :latest; local tag glm52-aqlm-sm121-baked:20260724-k12l1-vision on this fleet)
 ```
 
 Then `./start.sh pull` copies that image to the workers (docker save/rsync/load). Default `pull` does **not** hit the registry on workers — it saves/loads from the head. Set `PULL_FROM_REGISTRY=1` only if every node can pull the same `IMAGE` ref itself.
@@ -217,7 +241,7 @@ Copy [`.env.example`](.env.example). Important knobs:
 ### Current recipe (MTP)
 
 ```bash
-IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1  # == :latest (local tag glm52-aqlm-sm121-baked:20260724-k12l1)
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision  # == :latest (local tag glm52-aqlm-sm121-baked:20260724-k12l1-vision)
 KV_CACHE_DTYPE=nvfp4_ds_mla
 KV_CACHE_MEMORY_BYTES=12884901888   # 12 GiB
 MAX_MODEL_LEN=380928                # pool now exceeds it (~1.02×)
