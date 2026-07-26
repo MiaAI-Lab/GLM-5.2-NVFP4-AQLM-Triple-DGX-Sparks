@@ -2,6 +2,19 @@
 
 All notable releases of this ops recipe (images, default serve knobs, and docs) are listed here.
 
+## [v4.1] — 2026-07-26 — fp8 coding-speed path
+
+### Added
+
+- **`start_fp8.sh` + `.env.fp8.example`** — optional serve path: `KV_CACHE_DTYPE=fp8_ds_mla`, 12 GiB pin, `MAX_MODEL_LEN=235392`, `GPU_MEM_UTIL=0.9`. Same image as v4; default remains nvfp4 max-ctx via `./start.sh`.
+- Measured on this fleet (warm≥5 c1): structured **~25** / mixed **~15.5** tok/s; pool **~240k**; 40k long-ctx probe coherent.
+
+```bash
+cp .env.fp8.example .env.fp8 && ./start_fp8.sh ray && ./start_fp8.sh serve
+```
+
+---
+
 ## [v4] — 2026-07-26 — **VISION** support
 
 **Headline:** multimodal **VISION** is the default recipe. Image tag **`:k12l1-vision`** (= `:latest`).

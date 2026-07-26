@@ -8,6 +8,7 @@
 .env
 .env.*
 !.env.example
+!.env.fp8.example
 
 /*
 !.gitignore
@@ -15,8 +16,10 @@
 !CHANGELOG.md
 !LICENSE
 !start.sh
+!start_fp8.sh
 !stop.sh
 !.env.example
+!.env.fp8.example
 !scripts/
 
 /scripts/*

@@ -387,10 +387,19 @@ MAX_NUM_SEQS=1
 
 | Goal | Change |
 |------|--------|
-| More decode tok/s, less ctx | `KV_CACHE_DTYPE=fp8_ds_mla`, smaller pin / maxlen |
+| **Coding speed (fp8 path)** | `cp .env.fp8.example .env.fp8` then `./start_fp8.sh ray && ./start_fp8.sh serve` |
+| More decode tok/s, less ctx (manual) | `KV_CACHE_DTYPE=fp8_ds_mla`, 12 GiB pin, `MAX_MODEL_LEN=235392` |
 | Safer RAM | 8–10 GiB pin, maxlen ≈ new pool |
-| Max context | MTP on, DSpark off, 11 GiB + 348k (**VISION**) or 12 GiB + ~380k (text-only) |
+| Max context | MTP on, DSpark off, 11 GiB + 348k (**VISION**) or 12 GiB + ~380k (text-only) — `./start.sh` + `.env` |
 | Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (not when toggling DSpark mounts) |
+
+**fp8 coding path** (same image; separate env + launcher): structured decode ~**25** tok/s vs ~**21** on nvfp4 (this fleet), context **~235k** (pool ~240k @ 12 GiB). 40k long-ctx probe coherent. Do not run both serves on the same `PORT`.
+
+```bash
+cp .env.fp8.example .env.fp8   # first time; edit cluster secrets
+./start_fp8.sh ray && ./start_fp8.sh serve
+./start_fp8.sh smoke
+```
 
 ## Commands
 
@@ -404,6 +413,7 @@ MAX_NUM_SEQS=1
 | `./start.sh sync_dspark` | rsync DSpark draft to workers |
 | `./start.sh ray` | Start Ray head + 2 worker containers |
 | `./start.sh serve` | Launch `vllm serve` in the head container (default if no args) |
+| `./start_fp8.sh …` | Same subcommands as `start.sh`, but loads **`.env.fp8`** (fp8 coding recipe) |
 | `./start.sh status` | What’s running |
 | `./start.sh smoke` | Short coherence probe against `PORT` |
 | `./stop.sh` | Tear down serve + Ray containers (`UNMOUNT=1` also drops SSHFS mounts) |
@@ -412,9 +422,9 @@ MAX_NUM_SEQS=1
 
 Only the ops surface needed to run and stop the stack:
 
-- `start.sh` / `stop.sh`
+- `start.sh` / `start_fp8.sh` / `stop.sh`
 - `scripts/remote.py` (SSH helper)
-- `.env.example`
+- `.env.example` / `.env.fp8.example`
 - this README
 
 Clone the vLLM fork separately (see `VLLM_FORK_*` in `.env`), or pull the GHCR image. Weights, Docker images, and local `.env` stay on your machines (gitignored).
