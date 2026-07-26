@@ -360,6 +360,16 @@ docker_env_args() {
   if [[ -n "${VLLM_HYBRID_EXPERT_STATS:-}" ]]; then
     _dea+=(-e "VLLM_HYBRID_EXPERT_STATS=$VLLM_HYBRID_EXPERT_STATS")
   fi
+  # AQLM mem-path knobs (aqlm_moe_v2.cu): pass through only when set —
+  # unset = kernel baseline (GLM_MOE_AQLM_CB=l2, MLP=8, no stream/prefetch).
+  local _k
+  for _k in GLM_MOE_AQLM_CB GLM_MOE_AQLM_STREAM GLM_MOE_AQLM_MLP \
+            GLM_MOE_AQLM_PREFETCH GLM_MOE_AQLM_DBUF GLM_NVFP4_STREAM \
+            VLLM_ADAPTIVE_SPEC_DEPTHS VLLM_MTP_INSTRUMENT; do
+    if [[ -n "${!_k:-}" ]]; then
+      _dea+=(-e "$_k=${!_k}")
+    fi
+  done
 }
 
 # Common docker run flags. IB device + IPC_LOCK required on Spark for RoCE.
@@ -449,6 +459,7 @@ worker_docker_env_lines() {
         -e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \\
         -e VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800} \\
 $( [[ -n "${VLLM_HYBRID_EXPERT_STATS:-}" ]] && echo "        -e VLLM_HYBRID_EXPERT_STATS=${VLLM_HYBRID_EXPERT_STATS} \\" || echo "        \\" )
+$( _e=0; for _k in GLM_MOE_AQLM_CB GLM_MOE_AQLM_STREAM GLM_MOE_AQLM_MLP GLM_MOE_AQLM_PREFETCH GLM_MOE_AQLM_DBUF GLM_NVFP4_STREAM VLLM_ADAPTIVE_SPEC_DEPTHS VLLM_MTP_INSTRUMENT; do [[ -n "${!_k:-}" ]] && { echo "        -e $_k=${!_k} \\"; _e=1; }; done; [[ $_e == 0 ]] && echo "        \\" )
         -e MODEL_DIR=/models/1m \\
 EOF
 }
@@ -918,8 +929,25 @@ _spec_config() {
     printf '{"model":"%s","num_speculative_tokens":%s,"method":"dspark","draft_tensor_parallel_size":1}' \
       "$model" "$DSPARK_SPEC_TOKENS"
   else
-    printf '{"method":"deepseek_mtp","num_speculative_tokens":%s}' \
-      "$MTP_SPEC_TOKENS"
+    # MTP_DRAFT_TP=1 runs the 1-layer draft at TP1 (default: target TP).
+    # Draft is ~5GB; TP>1 pays cross-node collectives per draft step for a
+    # ~1.7GB/rank shard — pure latency at c1. A/B 2026-07-25.
+    # ADAPTIVE_MTP=1 enables acceptance-length adaptive speculative depth:
+    # num_speculative_tokens becomes the hard max (ADAPTIVE_MTP_MAX_K,
+    # default 5) and the scheduler controller picks k from
+    # VLLM_ADAPTIVE_SPEC_DEPTHS (default 2,4,5) per 32-step window.
+    local spec_tokens="$MTP_SPEC_TOKENS" adaptive=""
+    if [[ "${ADAPTIVE_MTP:-0}" == "1" ]]; then
+      spec_tokens="${ADAPTIVE_MTP_MAX_K:-5}"
+      adaptive=",\"adaptive_speculative_tokens_window\":${ADAPTIVE_MTP_WINDOW:-32}"
+    fi
+    if [[ "${MTP_DRAFT_TP:-0}" == "1" ]]; then
+      printf '{"method":"deepseek_mtp","num_speculative_tokens":%s,"draft_tensor_parallel_size":1%s}' \
+        "$spec_tokens" "$adaptive"
+    else
+      printf '{"method":"deepseek_mtp","num_speculative_tokens":%s%s}' \
+        "$spec_tokens" "$adaptive"
+    fi
   fi
 }
 
@@ -933,7 +961,12 @@ _compilation_config() {
   if [[ "${ENABLE_DSPARK:-0}" == "1" ]]; then
     k="${DSPARK_SPEC_TOKENS:-0}"
   elif [[ "${ENABLE_MTP:-0}" == "1" ]]; then
-    k="${MTP_SPEC_TOKENS:-0}"
+    if [[ "${ADAPTIVE_MTP:-0}" == "1" ]]; then
+      # Adaptive depth: capture sizes derive from the hard max k.
+      k="${ADAPTIVE_MTP_MAX_K:-5}"
+    else
+      k="${MTP_SPEC_TOKENS:-0}"
+    fi
   fi
   if [[ -z "$sizes" ]]; then
     local step=$((1 + k))
@@ -946,6 +979,18 @@ _compilation_config() {
       [[ "$s" -gt "$max" ]] && break
       sizes+=",$s"
     done
+    if [[ "${ADAPTIVE_MTP:-0}" == "1" ]]; then
+      # Per-ladder-depth decode shapes (k+1 tokens each) must be captured
+      # explicitly — multiples of (1+k_max) skip them, and round_up at
+      # capture time would otherwise leave e.g. k=2 (3 tok) without a graph.
+      local d small=""
+      IFS=',' read -ra _depths <<< "${VLLM_ADAPTIVE_SPEC_DEPTHS:-2,4,5}"
+      for d in "${_depths[@]}"; do
+        d=$((d + 1))
+        [[ ",$sizes," == *",$d,"* ]] || small+=",$d"
+      done
+      sizes="${small#,}${sizes:+,$sizes}"
+    fi
   fi
   # FUSE_PASSES: comma list of fusion flags (no spaces). Examples:
   #   act | norm | attn | ar | rope_mla | act,norm
@@ -1055,13 +1100,18 @@ cmd_serve() {
   docker rm -f "$SERVE_CTN" >/dev/null 2>&1 || true
   docker exec "$HEAD_CTN" bash -lc 'pkill -f "[v]llm serve" >/dev/null 2>&1 || true; rm -f /tmp/vllm-serve.log' || true
 
-  local CC SPEC_FLAG="" ASYNC_FLAG="" HF_FLAG="" KV_MEM_FLAG=""
+  local CC SPEC_FLAG="" ASYNC_FLAG="" HF_FLAG="" KV_MEM_FLAG="" MM_TP_FLAG=""
   CC=$(_compilation_config)
   if spec_enabled; then
     SPEC_FLAG="--speculative-config $(printf '%q' "$(_spec_config)")"
   fi
   if [[ "${ASYNC_SCHEDULING:-0}" == "1" ]]; then
     ASYNC_FLAG="--async-scheduling"
+  fi
+  # Vision tower TP mode. "data" replicates the ViT per rank (needed when its
+  # head count isn't divisible by TP, e.g. MoonViT 16 heads at TP3).
+  if [[ -n "${MM_ENCODER_TP_MODE:-}" ]]; then
+    MM_TP_FLAG="--mm-encoder-tp-mode $MM_ENCODER_TP_MODE"
   fi
   # Pass JSON overrides via container env to avoid nested-quote corruption.
   if [[ -n "${HF_OVERRIDES:-}" ]]; then
@@ -1093,7 +1143,7 @@ cmd_serve() {
       --compilation-config $(printf '%q' "$CC") \
       --enable-auto-tool-choice --tool-call-parser glm47 \
       --reasoning-parser glm45 \
-      $SPEC_FLAG $ASYNC_FLAG $HF_FLAG $KV_MEM_FLAG >>/tmp/vllm-serve.log 2>&1")"
+      $SPEC_FLAG $ASYNC_FLAG $HF_FLAG $KV_MEM_FLAG $MM_TP_FLAG >>/tmp/vllm-serve.log 2>&1")"
 
   info "vllm serve started in $HEAD_CTN — logging to $SERVE_LOG (container:/tmp/vllm-serve.log)"
   : >"$SERVE_LOG"
