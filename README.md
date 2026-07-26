@@ -1,4 +1,4 @@
-# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context (+ optional vision)
+# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
@@ -7,18 +7,18 @@
   <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
 </p>
 
-Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) (~272 GB text + ~1 GB vision on disk) with a vision-enabled build of [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) on **three NVIDIA DGX Spark** nodes (GB10 / sm_121 / aarch64) over RoCE. **Text + image input**: the current checkpoint revision is the `glm5v` vision build (MoonViT tower + patch-merger projector grafted onto the unchanged text backbone).
+Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) (~272 GB on disk) with [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) on **three NVIDIA DGX Spark** nodes (GB10 / sm_121 / aarch64) over RoCE.
 
-This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm_hybrid` path and TP3 head/MoE padding (`VLLM_GLM_TP_PAD`); the vision tower additionally needs `--mm-encoder-tp-mode data` at TP3 (its 16 attention heads are not divisible by 3).
+This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm_hybrid` path and TP3 head/MoE padding (`VLLM_GLM_TP_PAD`).
 
 ## Results (measured on a live 3× Spark rig)
 
-Default serve (MTP, not DSpark) — **text-only `20260724-k12l1` recipe** (fastest; vision is an opt-in below):
+Default serve (MTP, not DSpark) — **`20260724-k12l1` recipe**:
 
 | Metric | Value |
 |--------|--------|
 | Parallelism | TP3 · DCP1 · PP1 |
-| Model | `GlmMoeDsaForCausalLM` (text config of the same 77 shards; vision files unused) |
+| Model | `GlmMoeDsaForCausalLM` (77 shards, NVFP4 hot + AQLM 2-bit cold hybrid MoE) |
 | KV dtype | `nvfp4_ds_mla` |
 | KV pin | **12 GiB** (`KV_CACHE_MEMORY_BYTES=12884901888`) |
 | KV pool | **386,688 tokens** |
@@ -41,31 +41,11 @@ Warm single-stream decode on this AQLM+TP3 stack (content-dependent), measured 2
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
-> **Vision costs speed on text-only traffic (measured 2026-07-26, boot-matched A/B).** Serving the *same* weights through the `glm5v` wrapper is **~20% slower decode** (16.3 vs 20.4 structured, acceptance unchanged) and +0.5s ttft — the tax is in the multimodal serving path, not the weights. The default is therefore the text config; flip to vision only when you need image input (below).
-
-### Vision (glm5v) — opt-in, at a measured speed cost
-
-The HF repo's current `main` is a **vision-language** build: config is a `glm5v` wrapper (`text_config` + `vision_config`), and the vision code lives on the fork's `vision-graft` branch. Text weights are byte-identical; only ~1 GB of new files are needed (`vision_tower.safetensors`, `mm_projector.safetensors`, `kimi_k25_*.py`, `media_utils.py`, `preprocessor_config.json`, `chat_template.jinja`). This fleet serves it from a local `vision-sm121` fork branch (vision-graft cherry-picked onto the SM121/P-recipe tree) and image tag `glm52-aqlm-sm121-baked:vision`.
-
-Recipe deltas vs. the old text-only serve:
-
-```bash
-HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca   # vision-era main; text-only pin was 2d2ee49…
-MM_ENCODER_TP_MODE=data     # REQUIRED at TP3 — else boot dies: "16 is not divisible by 3" in kimi_k25_vit.py
-KV_CACHE_MEMORY_BYTES=11811160064   # 11 GiB (was 12 GiB) — frees ~1 GiB for the replicated tower
-MAX_MODEL_LEN=348160        # was 380928 — pool is now 354,496 tokens
-IMAGE=glm52-aqlm-sm121-baked:vision # local build; text-only rollback image is :20260724
-```
-
-Verified on this fleet (2026-07-25): `Multi-modal warmup completed`, KV pool 354,496 tokens, single- and two-image prompts answered correctly via both API shapes. Client-side gotchas (both bitten in practice): **mark the model vision-capable in your chat client** — clients like ZCode silently strip the attachment otherwise (`[Media omitted from provider request because the selected model does not support image input]`) and the model then truthfully says it can't see anything; and **keep the thinking budget well below `max_tokens`** — e.g. ZCode's `budget_tokens: 32000` with `max_tokens: 32001` leaves ~1 token for the reply and surfaces as "model returned no content".
-
-Switching to vision: restore the vision config set (`config.json` / `chat_template.jinja` / `model.safetensors.index.json` — backups at `~/models/hf/vision-swap-backup/` + worker `.vision-swap-bak/`) on all 3 nodes, `cp .env.bak-before-rollbackAB .env`, restart. Switching back: the pre-vision config set + `cp .env.working-best .env`. Details: `dev/docs/GLM-5.2-Vision-report.md` + `dev/docs/GLM-5.2-Vision-Tech-Guide.md`; the measured text-decode cost and the 4-leg A/B: `dev/docs/SPEED-IMPROVEMENTS.md` §0. Not covered here: the card's 950K + LMCache path (`UTIL=0.96`) — untested on this fleet.
-
 ### Disable `earlyoom` (highly recommended)
 
 **Highly recommended:** disable `earlyoom` on **all three Sparks** before bring-up and while serving this stack.
 
-At 11 GiB KV the machines sit near ~1 GiB free (often into swap). `earlyoom` (especially with a low free-mem threshold and a preference for `ray` / `python` / `vllm`) will **SIGTERM Ray workers mid CUDA-graph capture**. That looks like a GPU OOM but is the host killer. This fleet only held large-KV boots reliably after `earlyoom` was stopped.
+At these KV pins (11–12 GiB) the machines sit near ~1 GiB free (often into swap). `earlyoom` (especially with a low free-mem threshold and a preference for `ray` / `python` / `vllm`) will **SIGTERM Ray workers mid CUDA-graph capture**. That looks like a GPU OOM but is the host killer. This fleet only held large-KV boots reliably after `earlyoom` was stopped.
 
 ```bash
 # on every node (head + both workers)
@@ -180,18 +160,16 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 |-----|--------|
 | `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest` | **= `:k12l1` — use this one.** Recommended text-only image (default recipe): `20260724` + K1/K2 AQLM cold-path kernels + L1 draft size-1 capture fix, baked 2026-07-26. Best mixed tok/s; pair with the text config set + the 3 `GLM_MOE_AQLM_*` / `GLM_NVFP4_STREAM` knobs (set in `.env.example`) |
 | `…:k12l1` / `…:20260726-k12l1` | Named + date pins of the k12l1 backport (= local tag `glm52-aqlm-sm121-baked:20260724-k12l1`, digest `da18eccd…`) |
-| `ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:vision` | **Vision (glm5v)** serve image (arm64 / sm121), ~36 GB — built 2026-07-25 from the `vision-sm121` fork branch (`vision-graft` cherry-picked onto the SM121/P-recipe tree). Required for the vision `HF_REVISION` / image input; ~20% slower text decode than k12l1 |
-| `…:20260725-vision` | Date pin of the vision build |
 | `…:20260724` | Previous text-only build (2026-07-24 bake: fp8 W8A16 fix, pad-66 rule, MoE lane-rows, SwiGLU epilogue, M1/M2 hardening, nvfp4 FlashInfer patches). **Superseded by `:k12l1`** — same base minus K1/K2 + L1; kept as rollback pin |
 | `…:pre-b4-speed` / `…:20260722` | Previous build (needs the fork re-apply list for the current recipe) |
 
-> Pair image and weights correctly: the `:vision` image is required for the vision-era `HF_REVISION` (`53e0082e…`, `glm5v` config); the text-only `:latest` **cannot load the `glm5v` config** — pair it with the text-only pin (`2d2ee49…`). The local tag `glm52-aqlm-sm121-baked:vision` == `…:vision` on GHCR (same digest); build steps for reproducing it locally are in `dev/docs/GLM-5.2-Vision-Tech-Guide.md` §2–§3.
+> `:latest` = `:k12l1` is the default pull. `:20260724` is the previous text-only build, kept as a rollback pin.
 
 Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional.
 
 ### What's in `:k12l1` (and why you should use it)
 
-`:k12l1` is the current default serve image. It is the 2026-07-24 baked image plus two backports from the `vision-sm121` fork branch — no other changes (the rest of the tree, FlashInfer, and all attention/MoE/quant code are byte-identical to `:20260724`):
+`:k12l1` is the current default serve image. It is the 2026-07-24 baked image plus two kernel/graph backports developed on the serving fork’s SM121 branch — no other changes (the rest of the tree, FlashInfer, and all attention/MoE/quant code are byte-identical to `:20260724`):
 
 1. **K1 — AQLM cold-path gather mem-path** (`aqlm_moe_v2.cu`). The 2-bit "cold" MoE experts spend ~92% of their bus traffic on random 16B codebook gathers. K1 routes codebook gathers through L1 (`GLM_MOE_AQLM_CB=l1`) and marks the code/activation streams evict-first (`GLM_MOE_AQLM_STREAM=1`). Microbench: **w13 +2.7%, w2 +22.5% sector throughput**, bit-exact vs the shipped kernel.
 2. **K2 — evict-first on the NVFP4 hot weight stream** (`GLM_NVFP4_STREAM=1`, w13-only). Stops the ~210 MB/launch NVFP4 weight stream from evicting the 1 MB codebook from L2. Microbench: **w13 +7% sectors**, w2 flat, bit-exact.
@@ -203,11 +181,11 @@ All three are **bit-exact and env-gated** — the kernels default to the old beh
 
 > **2026-07-24:** `:latest` is now the baked build — the recipe numbers above (fp8 W8A16, pad 66, lane-rows, SwiGLU-fused w13, `index_topk_freq=8`, pool 386,688) work out of the box, no post-deploy patching. On the older `:20260722`/`pre-b4-speed` build, expect the previous recipe (pad 96, no fp8 W8A16, pool 248,896) unless the fork re-apply list is applied.
 
-Set in `.env` (vision build — the current fleet recipe):
+Set in `.env` (the current fleet recipe):
 
 ```bash
-IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:vision
-# (== local tag glm52-aqlm-sm121-baked:vision on this fleet)
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1
+# (== :latest; local tag glm52-aqlm-sm121-baked:20260724-k12l1 on this fleet)
 ```
 
 Then `./start.sh pull` copies that image to the workers (docker save/rsync/load). Default `pull` does **not** hit the registry on workers — it saves/loads from the head. Set `PULL_FROM_REGISTRY=1` only if every node can pull the same `IMAGE` ref itself.
@@ -226,24 +204,21 @@ Copy [`.env.example`](.env.example). Important knobs:
 | `HF_REPO` / `MODEL_DIR` | Checkpoint source and local path |
 | `TP_SIZE=3` `DCP_SIZE=1` | Keep DCP=1 on this sparse-MLA path |
 | `KV_CACHE_DTYPE` | `nvfp4_ds_mla` (max ctx) or `fp8_ds_mla` (faster decode) |
-| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (vision: `11811160064` = 11 GiB; text-only rollback: 12 GiB) |
+| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (`12884901888` = 12 GiB → pool 386,688) |
 | `MAX_MODEL_LEN` | Per-request context cap; set ≈ pool size for 1× concurrency |
 | `ENABLE_MTP` / `MTP_SPEC_TOKENS` | In-checkpoint MTP speculative decode (default path) |
 | `ENABLE_DSPARK` / `DSPARK_*` | External DSpark draft (see below); mutually exclusive with MTP |
 | `CUDAGRAPH_MODE` / `CUDAGRAPH_CAPTURE_SIZES` | FULL graphs + capture list |
 | `FUSE_PASSES` | e.g. `ar` → `fuse_allreduce_rms` |
-| `MM_ENCODER_TP_MODE` | `data` for the vision build at TP3 (replicates ViT per rank); empty = text-only behavior |
 | `NCCL_*` / `IB_HCA` / `GLOO_SOCKET_IFNAME` | Fabric tuning |
 
-### Current vision recipe (MTP)
+### Current recipe (MTP)
 
 ```bash
-HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca  # vision-era main of the same HF repo
-IMAGE=glm52-aqlm-sm121-baked:vision  # local build from the vision-sm121 fork branch
-MM_ENCODER_TP_MODE=data             # required at TP3 (MoonViT 16 heads % 3 != 0)
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1  # == :latest (local tag glm52-aqlm-sm121-baked:20260724-k12l1)
 KV_CACHE_DTYPE=nvfp4_ds_mla
-KV_CACHE_MEMORY_BYTES=11811160064   # 11 GiB — ~1 GiB freed for the replicated tower
-MAX_MODEL_LEN=348160                # pool now exceeds it (~1.02×)
+KV_CACHE_MEMORY_BYTES=12884901888   # 12 GiB
+MAX_MODEL_LEN=380928                # pool now exceeds it (~1.02×)
 MAX_NUM_SEQS=1
 ENABLE_MTP=1
 ENABLE_DSPARK=0
@@ -257,28 +232,9 @@ HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}
 After boot, confirm:
 
 ```text
-GPU KV cache size: 354,496 tokens
-Maximum concurrency for 348,160 tokens per request: 1.02x
-Multi-modal warmup completed
+GPU KV cache size: 386,688 tokens
+Maximum concurrency for 380,928 tokens per request: 1.02x
 ```
-
-### Text-only max-context recipe (MTP, rollback)
-
-```bash
-KV_CACHE_DTYPE=nvfp4_ds_mla
-KV_CACHE_MEMORY_BYTES=12884901888   # 12 GiB
-MAX_MODEL_LEN=380928              # pool now exceeds it (~1.02×)
-MAX_NUM_SEQS=1
-ENABLE_MTP=1
-ENABLE_DSPARK=0
-MTP_SPEC_TOKENS=3
-CUDAGRAPH_MODE=FULL
-FUSE_PASSES=ar,norm
-VLLM_DISABLE_FP8_W8A16=0            # fp8 on o_proj/shared experts
-HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}
-```
-
-Rollback boot confirms `GPU KV cache size: 386,688 tokens` / `1.02x` at 380,928. Full rollback: `cp .env.pre-vision .env`, `IMAGE=glm52-aqlm-sm121-baked:20260724`, `./start.sh ray && ./start.sh serve` (text shards are untouched by the vision build).
 
 If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl stop earlyoom` on all nodes) before blaming GPU OOM — see **Disable earlyoom** above.
 
@@ -293,9 +249,8 @@ Point the client at the head API and match the serve recipe:
 | Base URL | `http://<head-ip>:8888/v1` | OpenAI-compatible; `PORT` from `.env` |
 | Model id | `glm-5.2` | `SERVED_MODEL_NAME` |
 | API key | any non-empty string (e.g. `dummy`) | Auth is off on this stack |
-| Vision / image input | **enabled** | Required — clients silently drop attachments for models they think are text-only, and the model then truthfully says it can't see the image |
-| Context window | **348160** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool) |
-| Max output tokens | **348160** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 348160`; thinking counts toward this budget |
+| Context window | **380928** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool) |
+| Max output tokens | **380928** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 380928`; thinking counts toward this budget |
 | Reasoning / thinking | on if the client supports it | Thinking tokens count toward the **output** budget; keep any explicit thinking budget **well below** `max_tokens` (ZCode's `budget_tokens: 32000` with `max_tokens: 32001` starves the reply → "model returned no content") |
 
 Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
@@ -303,11 +258,11 @@ Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
 ```json
 {
   "id": "glm-5.2",
-  "name": "GLM 5.2 Vision NVFP4+AQLM TP3 MTP · 348k",
+  "name": "GLM 5.2 NVFP4+AQLM TP3 MTP · 380k",
   "reasoning": true,
-  "input": ["text", "image"],
-  "contextWindow": 348160,
-  "maxTokens": 348160,
+  "input": ["text"],
+  "contextWindow": 380928,
+  "maxTokens": 380928,
   "compat": {
     "supportsDeveloperRole": false,
     "supportsReasoningEffort": false,
@@ -359,16 +314,16 @@ Changing `ENABLE_DSPARK` requires a fresh `./start.sh ray` (volume flags are set
 
 #### Context constraints with DSpark
 
-The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for the RedHat preview) on top of the target. At the MTP max-context envelope (~120 GiB / 121 GiB used, often swapping), that headroom is mostly gone. **Lower the KV pin back to ~8 GiB when running DSpark** (the 11 GiB / 348k pin leaves no room for the draft).
+The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for the RedHat preview) on top of the target. At the MTP max-context envelope (~120 GiB / 121 GiB used, often swapping), that headroom is mostly gone. **Lower the KV pin back to ~8 GiB when running DSpark** (the 12 GiB / 380k pin leaves no room for the draft).
 
 | Goal | Suggested knobs | Expect |
 |------|-----------------|--------|
 | Proven DSpark band | `MAX_MODEL_LEN=100000`, pin **8 GiB** | Boots; about **~20 tok/s** decode on this stack |
 | Long but stable | **120–150k**, pin 8 GiB (or 6 GiB if capture dies) | Best practical long-ctx + DSpark |
 | Stretch | ~180k | Maybe; stop `earlyoom` first |
-| MTP-class max (~348k) | — | **Not recommended** with DSpark — use MTP for max context |
+| MTP-class max (~380k) | — | **Not recommended** with DSpark — use MTP for max context |
 
-DSpark is optional for draft experiments; prefer **MTP** for the default **~348k** max-context recipe (memory headroom). DSpark was only validated on the text-only build — not with the vision tower.
+DSpark is optional for draft experiments; prefer **MTP** for the default **~380k** max-context recipe (memory headroom).
 
 **Measured on the baked image (2026-07-24, Sparkulator W4A16, K=3, 100k, same-session warm c1):** structured **20.2** / mixed **12.2** tok/s — short-context parity with MTP-3 (20.5–21.0 / 13–15). But the 26k-context probe decode collapses to **~6 tok/s vs MTP's 17.6–20.4** (~3× slower): the draft runs full dense attention over the whole context every step. Acceptance length ~2.0–3.3. Net: no speed win over MTP at any context length, plus the ctx cap — DSpark stays a draft-research path, not a serving recipe.
 
@@ -390,7 +345,7 @@ MAX_NUM_SEQS=1
 |------|--------|
 | More decode tok/s, less ctx | `KV_CACHE_DTYPE=fp8_ds_mla`, smaller pin / maxlen |
 | Safer RAM | 8–10 GiB pin, maxlen ≈ new pool |
-| Max context | MTP on, DSpark off, 11 GiB + ~348k (vision, current) or 12 GiB + ~380k (text-only rollback) |
+| Max context | MTP on, DSpark off, 12 GiB + ~380k |
 | Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (not when toggling DSpark mounts) |
 
 ## Commands
@@ -425,18 +380,16 @@ Local experiment / port / handoff material (if present on a development checkout
 ## Known limits
 
 - **3 Sparks / TP3** — target dims are padded (**64→66 heads** via the backend-gated rule, MoE intermediate 2048→2112); the DSpark draft pads 64→96. See fork `glm_tp_pad` / `qwen3_dflash`. A 4th Spark (TP4) is a different recipe (e.g. QuantTrio Int4–Int8Mix), not a drop-in.  
-- **Vision tower at TP3** — MoonViT's 16 heads don't shard 3-ways; `MM_ENCODER_TP_MODE=data` (replicated ViT, ~0.9 GB/GPU) is mandatory. Vision + MTP verified; vision + DSpark untested.  
-- **950K + LMCache + Vision** — the model card's headline path (`UTIL=0.96`) is **not** this fleet's recipe and is untested here; the card itself only validates 130K + image jointly.  
-- **Image token tax** — each image spends context (~361 tokens @512² up to ~4,225 @3000²); huge galleries can eat a meaningful slice of a 348k window.  
+- **950K + LMCache** — the model card’s headline path (`UTIL=0.96`) is **not** this fleet’s recipe and is untested here.  
 - **DCP &gt; 1** — not reliable on this sparse-MLA GB10 path; keep `DCP_SIZE=1`.  
 - **Jarrelscy ~1M ctx** — needs TP4+DCP4 on 4× discrete GPUs; not this 3× DCP1 layout.  
-- **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~348k ceiling.  
+- **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~380k ceiling.  
 - **earlyoom** — **highly recommended off** on all nodes for this recipe; it will kill capture at large KV pins (see above).
 
 ## Credits
 
-- [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) — checkpoint (vision build: MoonViT tower + projector graft)  
-- [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) — serving fork (`vision-graft` branch for `glm5v`; this fleet runs a local `vision-sm121` merge)  
+- [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) — checkpoint (NVFP4 hot + AQLM 2-bit cold hybrid MoE)  
+- [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) — serving fork (`glm52-sm120` branch; SM121 baked images on GHCR)  
 - [sapidlabs/Sparkulator-GLM-5.2](https://huggingface.co/sapidlabs/Sparkulator-GLM-5.2) / [RedHatAI DSpark preview](https://huggingface.co/RedHatAI/GLM-5.2-speculator.dspark-preview) — optional draft  
 - NVFP4 KV layout / Spark recipes inspired by community ports ([tonyd2wild](https://github.com/tonyd2wild/GLM-5.2-NVFP4-KV-4x-DGX-Spark-300kctx-42tok-s), danielwoz, CosmicRaisins, b12x, and related Spark GLM-5.2 work)
 
