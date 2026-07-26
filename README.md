@@ -1,5 +1,7 @@
 # GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context
 
+**Release v3** — k12l1 serve image (K1/K2 cold-path kernels + L1 draft capture fix): ~21 structured / ~14 mixed tok/s, 386,688-token KV pool.
+
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
   <br><br>
@@ -167,9 +169,9 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
 Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional.
 
-### What's in `:k12l1` (and why you should use it)
+### What's new in v3 (`:k12l1`)
 
-`:k12l1` is the current default serve image. It is the 2026-07-24 baked image plus two kernel/graph backports developed on the serving fork’s SM121 branch — no other changes (the rest of the tree, FlashInfer, and all attention/MoE/quant code are byte-identical to `:20260724`):
+v3 (`:k12l1`) is the current default serve image. It is the 2026-07-24 baked image plus two kernel/graph backports developed on the serving fork’s SM121 branch — no other changes (the rest of the tree, FlashInfer, and all attention/MoE/quant code are byte-identical to `:20260724`):
 
 1. **K1 — AQLM cold-path gather mem-path** (`aqlm_moe_v2.cu`). The 2-bit "cold" MoE experts spend ~92% of their bus traffic on random 16B codebook gathers. K1 routes codebook gathers through L1 (`GLM_MOE_AQLM_CB=l1`) and marks the code/activation streams evict-first (`GLM_MOE_AQLM_STREAM=1`). Microbench: **w13 +2.7%, w2 +22.5% sector throughput**, bit-exact vs the shipped kernel.
 2. **K2 — evict-first on the NVFP4 hot weight stream** (`GLM_NVFP4_STREAM=1`, w13-only). Stops the ~210 MB/launch NVFP4 weight stream from evicting the 1 MB codebook from L2. Microbench: **w13 +7% sectors**, w2 flat, bit-exact.
