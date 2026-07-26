@@ -1,6 +1,6 @@
-# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 380k context (+ optional vision)
+# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • 348k ctx + vision (380k text option)
 
-**Release v3** — k12l1 serve image (K1/K2 cold-path kernels + L1 draft capture fix): ~21 structured / ~14-19 mixed tok/s, 386,688-token KV pool. **v3.1:** `:latest` is now the k12l1-vision superset — optional glm5v image input at full text speed.
+**Release v3.1** — k12l1-vision serve image (K1/K2 cold-path kernels + L1 draft capture fix + glm5v wrapper with the top-k override fix): ~21 structured / ~13.6-19 mixed tok/s **with vision enabled**, 354,496-token KV pool @ 348k ctx. Text-only 380k (pool 386,688) = a config swap on the same image.
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
@@ -15,39 +15,41 @@ This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm
 
 ## Results (measured on a live 3× Spark rig)
 
-Default serve (MTP, not DSpark) — **`20260724-k12l1` recipe**:
+Default serve (MTP, not DSpark) — **vision-enabled `20260724-k12l1-vision` recipe**:
 
 | Metric | Value |
 |--------|--------|
 | Parallelism | TP3 · DCP1 · PP1 |
-| Model | `GlmMoeDsaForCausalLM` (77 shards, NVFP4 hot + AQLM 2-bit cold hybrid MoE) |
+| Model | `Glm5vForConditionalGeneration` (glm5v: MoonViT tower + unchanged text backbone, 77 shards, NVFP4 hot + AQLM 2-bit cold hybrid MoE) |
+| Weights revision | `HF_REVISION=53e0082e…` (vision-era `main`) |
+| Vision encoder | `MM_ENCODER_TP_MODE=data` (required at TP3 — 16 heads not divisible by 3) |
 | KV dtype | `nvfp4_ds_mla` |
-| KV pin | **12 GiB** (`KV_CACHE_MEMORY_BYTES=12884901888`) |
-| KV pool | **386,688 tokens** |
-| Max context (1 session) | **`max_model_len=380928`** (~1.02× concurrency) |
+| KV pin | **11 GiB** (`KV_CACHE_MEMORY_BYTES=11811160064`) |
+| KV pool | **354,496 tokens** |
+| Max context (1 session) | **`max_model_len=348160`** (~1.02× concurrency) |
 | Spec decode | MTP-3 (in-checkpoint) |
 | CUDA graphs | FULL · capture `[4,8,12,16,20,24]` (incl. L1 draft size-1 capture fix) |
 | Fusion | `FUSE_PASSES=ar,norm` (`fuse_allreduce_rms` + `fuse_norm_quant`) |
 | Attention/MoE | TP3 head pad **64→66** · MoE w2 lane-rows G=16 · SwiGLU-fused w13 |
 | Cold-path knobs | `GLM_MOE_AQLM_CB=l1` · `GLM_MOE_AQLM_STREAM=1` · `GLM_NVFP4_STREAM=1` (K1/K2, bit-exact, baked into the image) |
 | Quant extras | fp8 W8A16 on o_proj/shared experts (`VLLM_DISABLE_FP8_W8A16=0`) |
-| Indexer | `HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}` |
+| Indexer | `HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}` (reaches `text_config` via the v3.1 passthrough fix) |
 | API | `:8888` — OpenAI `/v1/chat/completions` **and** Anthropic `/v1/messages` |
 
-Warm single-stream decode on this AQLM+TP3 stack (content-dependent), measured 2026-07-26 boot-matched on the live recipe:
+**Text-only 380k variant** (same image, wrapper dormant ≡ `:k12l1` exactly): swap in the text config set, `KV_CACHE_MEMORY_BYTES=12884901888` (12 GiB), `MAX_MODEL_LEN=380928` → pool **386,688**.
+
+Warm single-stream decode on this AQLM+TP3 stack (content-dependent), measured 2026-07-26 boot-matched on the live (vision) recipe:
 
 | | Approx. tok/s |
 |--|----------------|
 | Structured | **~21** |
-| Mixed (real interactive use) | **~14-19** (context-dependent) |
+| Mixed (real interactive use) | **~13.6-19** (context-dependent) |
 
 Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
 
-### Vision (glm5v) — opt-in, full text speed (fixed 2026-07-26)
+### Vision (glm5v) — the default since v3.1, full text speed
 
-The HF repo's current `main` is a **vision-language** build: config is a `glm5v` wrapper (`text_config` + `vision_config`). Text weights are byte-identical; only ~1 GB of new files are needed (`vision_tower.safetensors`, `mm_projector.safetensors`, `kimi_k25_*.py`, `media_utils.py`, `preprocessor_config.json`, `chat_template.jinja`). Serve it with the **`:k12l1-vision`** image (= `:latest`) — the k12l1 text image plus the glm5v wrapper **and a config-override fix** (below).
-
-Recipe deltas vs. the text-only serve:
+The default recipe above **is** the vision build: config is a `glm5v` wrapper (`text_config` + `vision_config`) served by the **`:k12l1-vision`** image (= `:latest`) — the k12l1 text image plus the glm5v wrapper **and a config-override fix** (below). Vision vs. the old text-only serve is only these deltas:
 
 ```bash
 HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca   # vision-era main; text-only pin is 2d2ee49…
@@ -56,14 +58,15 @@ KV_CACHE_MEMORY_BYTES=11811160064   # 11 GiB (was 12 GiB) — frees ~1 GiB for t
 MAX_MODEL_LEN=348160        # was 380928 — pool is now 354,496 tokens
 IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision   # == :latest
 # weights dir must carry the VISION config set (config.json / chat_template.jinja /
-# model.safetensors.index.json from the vision revision)
+# model.safetensors.index.json from the vision revision — what ./start.sh download
+# fetches at HF_REVISION=53e0082e…)
 ```
 
 **The 2026-07-25 `:vision` build was ~20% slower on text decode — root-caused and fixed.** Flat `--hf-overrides` keys land on the top-level `glm5v` wrapper config, and `num_experts_per_tok:4` never propagated to the nested `text_config` the MoE actually reads → the vision stack silently ran the MoE at **top-8 instead of top-4** (~2× routed-expert traffic; acceptance unchanged, hiding it). The fixed image adds one passthrough property. Measured on the fixed build + vision config (boot-matched, warm≥5, r1+r2): structured **21.0/20.9**, mixed **13.7/13.6**, ttft **~0.9–1.0s** — text-recipe parity. Gates: single-image smoke exact (red square / white circle), 40k long-ctx probe coherent. **Do not use the old `:20260725-vision` pin** (top-8 bug).
 
 Verified on this fleet (2026-07-26): `Multi-modal warmup completed`, KV pool 354,496 tokens, image prompts answered via both API shapes. Client-side gotchas (both bitten in practice): **mark the model vision-capable in your chat client** — clients like ZCode silently strip the attachment otherwise (`[Media omitted from provider request because the selected model does not support image input]`) and the model then truthfully says it can't see anything; and **keep the thinking budget well below `max_tokens`** — e.g. ZCode's `budget_tokens: 32000` with `max_tokens: 32001` leaves ~1 token for the reply and surfaces as "model returned no content".
 
-Switching between text and vision is a **config swap only** (same image): swap `config.json` / `chat_template.jinja` / `model.safetensors.index.json` on all 3 nodes + restart. Details: `dev/docs/GLM-5.2-Vision-report.md` + `dev/docs/GLM-5.2-Vision-Tech-Guide.md`; root-cause write-up and A/B numbers: `dev/docs/SPEED-IMPROVEMENTS.md` §0 "VISION-REGRESSION RESOLVED". Not covered here: the card's 950K + LMCache path (`UTIL=0.96`) — untested on this fleet.
+Switching between vision and text-only is a **config swap only** (same image): swap `config.json` / `chat_template.jinja` / `model.safetensors.index.json` on all 3 nodes + restart. Details: `dev/docs/GLM-5.2-Vision-report.md` + `dev/docs/GLM-5.2-Vision-Tech-Guide.md`; root-cause write-up and A/B numbers: `dev/docs/SPEED-IMPROVEMENTS.md` §0 "VISION-REGRESSION RESOLVED". Not covered here: the card's 950K + LMCache path (`UTIL=0.96`) — untested on this fleet.
 
 ### Disable `earlyoom` (highly recommended)
 
@@ -230,7 +233,7 @@ Copy [`.env.example`](.env.example). Important knobs:
 | `HF_REPO` / `MODEL_DIR` | Checkpoint source and local path |
 | `TP_SIZE=3` `DCP_SIZE=1` | Keep DCP=1 on this sparse-MLA path |
 | `KV_CACHE_DTYPE` | `nvfp4_ds_mla` (max ctx) or `fp8_ds_mla` (faster decode) |
-| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (`12884901888` = 12 GiB → pool 386,688) |
+| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (`11811160064` = 11 GiB → pool 354,496; text-only variant 12 GiB → 386,688) |
 | `MAX_MODEL_LEN` | Per-request context cap; set ≈ pool size for 1× concurrency |
 | `ENABLE_MTP` / `MTP_SPEC_TOKENS` | In-checkpoint MTP speculative decode (default path) |
 | `ENABLE_DSPARK` / `DSPARK_*` | External DSpark draft (see below); mutually exclusive with MTP |
@@ -242,9 +245,11 @@ Copy [`.env.example`](.env.example). Important knobs:
 
 ```bash
 IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision  # == :latest (local tag glm52-aqlm-sm121-baked:20260724-k12l1-vision)
+HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca  # vision-era main (glm5v config set)
+MM_ENCODER_TP_MODE=data               # REQUIRED for the vision tower at TP3
 KV_CACHE_DTYPE=nvfp4_ds_mla
-KV_CACHE_MEMORY_BYTES=12884901888   # 12 GiB
-MAX_MODEL_LEN=380928                # pool now exceeds it (~1.02×)
+KV_CACHE_MEMORY_BYTES=11811160064     # 11 GiB
+MAX_MODEL_LEN=348160                  # pool now exceeds it (~1.02×)
 MAX_NUM_SEQS=1
 ENABLE_MTP=1
 ENABLE_DSPARK=0
@@ -258,8 +263,8 @@ HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}
 After boot, confirm:
 
 ```text
-GPU KV cache size: 386,688 tokens
-Maximum concurrency for 380,928 tokens per request: 1.02x
+GPU KV cache size: 354,496 tokens
+Maximum concurrency for 348,160 tokens per request: 1.02x
 ```
 
 If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl stop earlyoom` on all nodes) before blaming GPU OOM — see **Disable earlyoom** above.
@@ -275,20 +280,21 @@ Point the client at the head API and match the serve recipe:
 | Base URL | `http://<head-ip>:8888/v1` | OpenAI-compatible; `PORT` from `.env` |
 | Model id | `glm-5.2` | `SERVED_MODEL_NAME` |
 | API key | any non-empty string (e.g. `dummy`) | Auth is off on this stack |
-| Context window | **380928** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool) |
-| Max output tokens | **380928** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 380928`; thinking counts toward this budget |
+| Context window | **348160** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool); text-only 380k variant: 380928 |
+| Max output tokens | **348160** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 348160`; thinking counts toward this budget |
 | Reasoning / thinking | on if the client supports it | Thinking tokens count toward the **output** budget; keep any explicit thinking budget **well below** `max_tokens` (ZCode's `budget_tokens: 32000` with `max_tokens: 32001` starves the reply → "model returned no content") |
+| Image input | enable / vision-capable | Clients that don't know the model is multimodal silently strip attachments (`[Media omitted …]`) |
 
 Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
 
 ```json
 {
   "id": "glm-5.2",
-  "name": "GLM 5.2 NVFP4+AQLM TP3 MTP · 380k",
+  "name": "GLM 5.2 NVFP4+AQLM TP3 MTP · 348k + vision",
   "reasoning": true,
-  "input": ["text"],
-  "contextWindow": 380928,
-  "maxTokens": 380928,
+  "input": ["text", "image"],
+  "contextWindow": 348160,
+  "maxTokens": 348160,
   "compat": {
     "supportsDeveloperRole": false,
     "supportsReasoningEffort": false,
@@ -340,7 +346,7 @@ Changing `ENABLE_DSPARK` requires a fresh `./start.sh ray` (volume flags are set
 
 #### Context constraints with DSpark
 
-The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for the RedHat preview) on top of the target. At the MTP max-context envelope (~120 GiB / 121 GiB used, often swapping), that headroom is mostly gone. **Lower the KV pin back to ~8 GiB when running DSpark** (the 12 GiB / 380k pin leaves no room for the draft).
+The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for the RedHat preview) on top of the target. At the MTP max-context envelope (~120 GiB / 121 GiB used, often swapping), that headroom is mostly gone. **Lower the KV pin back to ~8 GiB when running DSpark** (the 11–12 GiB / 348–380k pins leave no room for the draft).
 
 | Goal | Suggested knobs | Expect |
 |------|-----------------|--------|
@@ -349,7 +355,7 @@ The draft adds several GiB resident (about **4.6 GiB** for Sparkulator, more for
 | Stretch | ~180k | Maybe; stop `earlyoom` first |
 | MTP-class max (~380k) | — | **Not recommended** with DSpark — use MTP for max context |
 
-DSpark is optional for draft experiments; prefer **MTP** for the default **~380k** max-context recipe (memory headroom).
+DSpark is optional for draft experiments; prefer **MTP** for the default max-context recipe (memory headroom).
 
 **Measured on the baked image (2026-07-24, Sparkulator W4A16, K=3, 100k, same-session warm c1):** structured **20.2** / mixed **12.2** tok/s — short-context parity with MTP-3 (20.5–21.0 / 13–15). But the 26k-context probe decode collapses to **~6 tok/s vs MTP's 17.6–20.4** (~3× slower): the draft runs full dense attention over the whole context every step. Acceptance length ~2.0–3.3. Net: no speed win over MTP at any context length, plus the ctx cap — DSpark stays a draft-research path, not a serving recipe.
 
@@ -371,7 +377,7 @@ MAX_NUM_SEQS=1
 |------|--------|
 | More decode tok/s, less ctx | `KV_CACHE_DTYPE=fp8_ds_mla`, smaller pin / maxlen |
 | Safer RAM | 8–10 GiB pin, maxlen ≈ new pool |
-| Max context | MTP on, DSpark off, 12 GiB + ~380k |
+| Max context | MTP on, DSpark off, 11 GiB + 348k (vision) or 12 GiB + ~380k (text-only) |
 | Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (not when toggling DSpark mounts) |
 
 ## Commands
@@ -409,7 +415,7 @@ Local experiment / port / handoff material (if present on a development checkout
 - **950K + LMCache** — the model card’s headline path (`UTIL=0.96`) is **not** this fleet’s recipe and is untested here.  
 - **DCP &gt; 1** — not reliable on this sparse-MLA GB10 path; keep `DCP_SIZE=1`.  
 - **Jarrelscy ~1M ctx** — needs TP4+DCP4 on 4× discrete GPUs; not this 3× DCP1 layout.  
-- **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~380k ceiling.  
+- **DSpark vs max ctx** — draft costs several GiB; plan on **~100–150k** context, not the MTP ~348–380k ceiling.  
 - **earlyoom** — **highly recommended off** on all nodes for this recipe; it will kill capture at large KV pins (see above).
 
 ## Credits

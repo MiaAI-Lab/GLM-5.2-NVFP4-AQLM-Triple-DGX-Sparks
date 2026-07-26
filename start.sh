@@ -93,8 +93,8 @@ NCCL_GRAPH_MIXING_SUPPORT="${NCCL_GRAPH_MIXING_SUPPORT:-1}"
 SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}"
 
 HF_REPO="${HF_REPO:-jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid}"
-# Pin text-only hybrid (pre vision-graft Glm5v). Override to main/vision only with a vision-capable image.
-HF_REVISION="${HF_REVISION:-2d2ee496fbbe81222789bc8828a770241d2ffa2b}"
+# Default: vision-era main (glm5v config). Text-only pin: 2d2ee496fbbe81222789bc8828a770241d2ffa2b
+HF_REVISION="${HF_REVISION:-53e0082eedebd806b63e19779c47905937d768ca}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/hf/GLM-5.2-NVFP4-AQLM-hybrid}"
 COMMON_MODEL="${COMMON_MODEL:-/var/tmp/glm52-aqlm}"
 WORKER_MODEL_LOCAL="${WORKER_MODEL_LOCAL:-models/hf/GLM-5.2-NVFP4-AQLM-hybrid}"
