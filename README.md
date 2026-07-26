@@ -392,6 +392,48 @@ MAX_NUM_SEQS=1
 | Max context | MTP on, DSpark off, 11 GiB + 348k (**VISION**) or 12 GiB + ~380k (text-only) |
 | Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (not when toggling DSpark mounts) |
 
+### Concurrent serving
+
+The published recipe runs `MAX_NUM_SEQS=1` to maximize single-session context (348k–380k). For multi-user throughput, raising `MAX_NUM_SEQS` and switching the KV cache to `fp8_ds_mla` unlocks **1.8× aggregate tok/s** at 4 concurrent requests — with a modest context trade-off.
+
+A 6-config batching sweep was run on the same 3× Spark rig (TP3, AQLM, `:k12l1` text-only image, MTP-3, 2026-07-26):
+
+| Config | `MAX_NUM_SEQS` | KV dtype | KV pin | `MAX_MODEL_LEN` | Single tok/s | 4-concurrent aggregate |
+|--------|-----------------|-----------|--------|------------------|---------------|------------------------|
+| baseline (published recipe) | 1 | `nvfp4_ds_mla` | 12 GiB | 380928 | 16.1 | 15.4 |
+| `batch_2seq` | 2 | `nvfp4_ds_mla` | 12 GiB | 380928 | 16.1 | 11.4 |
+| `batch_4seq` | 4 | `nvfp4_ds_mla` | 12 GiB | 380928 | 16.2 | 23.7 |
+| `batch_8seq` | 8 | `nvfp4_ds_mla` | 12 GiB | 380928 | 15.5 | 22.9 |
+| **`batch_4seq_fp8kv` (BEST)** | **4** | **`fp8_ds_mla`** | **12 GiB** | **65536** | **17.9** | **28.9** |
+| `batch_4seq_short` | 4 | `nvfp4_ds_mla` | 8 GiB | 32768 | 15.9 | 22.6 |
+
+**Key findings:**
+
+1. **fp8 KV cache (`fp8_ds_mla`) + `MAX_NUM_SEQS=4`** delivers **28.9 tok/s aggregate** at 4 concurrent — **1.8× the published recipe's 15.4**.
+2. Single-seq decode also improves **11%** (16.1 → 17.9) with fp8 KV — the narrower KV dtype reduces memory traffic per decode step.
+3. `MAX_NUM_SEQS=8` OOMs at 8 concurrent with 12 GiB KV pin — 4 is the sweet spot.
+4. Diminishing returns past 4 concurrent: `batch_4seq` (23.7) ≈ `batch_8seq` (22.9) in aggregate, but 8-seq risks instability.
+
+> **Context trade-off:** `MAX_MODEL_LEN` is reduced to **65536** to fit 4 concurrent sessions within the 12 GiB KV pool. The full **380k context** remains available with `MAX_NUM_SEQS=1` (the default recipe). Pick the config that matches your workload — long-context single-user vs. multi-user throughput.
+
+**Concurrent serving recipe** (`.env`):
+
+```bash
+# Concurrent serving (max throughput for multi-user loads)
+# Measured: 28.9 tok/s aggregate at 4 concurrent (1.8× single-seq baseline)
+KV_CACHE_DTYPE=fp8_ds_mla
+KV_CACHE_MEMORY_BYTES=12884901888
+MAX_MODEL_LEN=65536
+MAX_NUM_SEQS=4
+```
+
+Swap these four values into the serve block, restart with `./start.sh serve` (`SKIP_RAY=1` is fine — only KV/seq knobs change). Verify in the boot log:
+
+```text
+GPU KV cache size: ~1,024,000 tokens   # 12 GiB / fp8 → larger pool per GiB
+Maximum concurrency for 65,536 tokens per request: ~15x
+```
+
 ## Commands
 
 | Command | Action |
