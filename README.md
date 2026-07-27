@@ -1,6 +1,13 @@
-# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • **VISION** @ 348k ctx (380k text option)
+# GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • **VISION** · two KV recipes
 
-**Release v4** — **VISION** default (`:k12l1-vision`): glm5v multimodal serve (MoonViT + text backbone) at full text speed, on top of K1/K2 cold-path kernels + L1 draft capture fix + top-k override fix. ~21 structured / ~13.6-19 mixed tok/s **with vision enabled**, 354,496-token KV pool @ 348k ctx. Text-only 380k (pool 386,688) = a config swap on the same image.
+**Release v4.5** — same **VISION** image (`:k12l1-vision`), two serve paths with **separate launchers and env files**:
+
+| Path | Launcher | Env | KV cache | Context | Structured decode | Mixed decode |
+|------|----------|-----|----------|---------|-------------------|--------------|
+| **Max context (default)** | `./start.sh` | `.env` ← [`.env.example`](.env.example) | **`nvfp4_ds_mla`** | **~348k** (vision) / **~380k** (text) | **~21** tok/s | **~13.6–19** tok/s |
+| **Coding speed** | `./start_fp8.sh` | `.env.fp8` ← [`.env.fp8.example`](.env.fp8.example) | **`fp8_ds_mla`** | **~235k** | **~25** tok/s | **~15.5** tok/s |
+
+Same Docker image, weights, and cluster. Pick one path, don’t run both on the same `PORT`. Text-only 380k remains a **config swap** on the nvfp4 path (same image).
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
@@ -13,39 +20,58 @@ Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM
 
 This is **not** stock vLLM. The hybrid checkpoint needs the fork’s `nvfp4_aqlm_hybrid` path and TP3 head/MoE padding (`VLLM_GLM_TP_PAD`); the **vision** tower additionally needs `--mm-encoder-tp-mode data` at TP3 (its 16 attention heads are not divisible by 3).
 
-## Results (measured on a live 3× Spark rig)
+## Two serve paths (nvfp4 vs fp8 KV)
 
-Default serve (MTP, not DSpark) — **v4 VISION recipe** (`20260724-k12l1-vision`):
+Both paths share the **same** image (`:k12l1-vision`), checkpoint, MTP-3, graphs, and MoE knobs. Only **KV cache dtype / pin / max context** and the **launcher + env file** differ.
+
+| | **Path A — max context** | **Path B — coding speed** |
+|--|--------------------------|---------------------------|
+| **When to use** | Long agents, huge paste, max window | IDE / code gen; prefer tok/s over 300k+ ctx |
+| **Launcher** | `./start.sh` | `./start_fp8.sh` |
+| **Env file** | `.env` (from `.env.example`) | `.env.fp8` (from `.env.fp8.example`) |
+| **KV dtype** | `nvfp4_ds_mla` | `fp8_ds_mla` |
+| **KV pin** | **11 GiB** (vision) / 12 GiB (text-only) | **12 GiB** |
+| **KV pool** | **354,496** (vision) / **386,688** (text) | **~240,640** (measured) |
+| **`MAX_MODEL_LEN`** | **348160** / **380928** | **235392** |
+| **`GPU_MEM_UTIL`** | 0.895 | 0.9 |
+| **Structured decode** (code-like; warm≥5 c1) | **~21** tok/s | **~25** tok/s (~**+20%**) |
+| **Mixed decode** (prose / chat) | **~13.6–19** tok/s | **~15.5** tok/s |
+| **Short-prompt TTFT** | ~0.9–1.0 s | ~0.7–0.8 s |
+| **40k long-ctx probe** | coherent | coherent |
+| **Client context window** | 348160 (or 380928 text) | **235392** |
+
+```bash
+# Path A — max context (default)
+cp .env.example .env          # first time; edit cluster secrets
+./start.sh ray && ./start.sh serve
+
+# Path B — coding speed (fp8 KV)
+cp .env.fp8.example .env.fp8  # first time; edit cluster secrets
+./start_fp8.sh ray && ./start_fp8.sh serve
+```
+
+`start_fp8.sh` is a full copy of `start.sh` that sources **`.env.fp8` only** (never `.env`). Same subcommands (`doctor`, `ray`, `serve`, `smoke`, …). Tear-down is still `./stop.sh` (shared containers).
+
+**Decode note:** *structured* ≈ coding / tight format (primary for IDE use); *mixed* ≈ prose. Numbers are single-stream, `enable_thinking: false`, boot-matched on this fleet (2026-07-26).
+
+### Shared stack (both paths)
 
 | Metric | Value |
 |--------|--------|
 | Parallelism | TP3 · DCP1 · PP1 |
-| Model | `Glm5vForConditionalGeneration` (glm5v: MoonViT tower + unchanged text backbone, 77 shards, NVFP4 hot + AQLM 2-bit cold hybrid MoE) |
+| Model | `Glm5vForConditionalGeneration` (glm5v: MoonViT + text backbone, 77 shards, NVFP4 hot + AQLM 2-bit cold hybrid MoE) |
 | Weights revision | `HF_REVISION=53e0082e…` (**VISION**-era `main`) |
 | **VISION** encoder | `MM_ENCODER_TP_MODE=data` (required at TP3 — 16 heads not divisible by 3) |
-| KV dtype | `nvfp4_ds_mla` |
-| KV pin | **11 GiB** (`KV_CACHE_MEMORY_BYTES=11811160064`) |
-| KV pool | **354,496 tokens** |
-| Max context (1 session) | **`max_model_len=348160`** (~1.02× concurrency) |
 | Spec decode | MTP-3 (in-checkpoint) |
 | CUDA graphs | FULL · capture `[4,8,12,16,20,24]` (incl. L1 draft size-1 capture fix) |
-| Fusion | `FUSE_PASSES=ar,norm` (`fuse_allreduce_rms` + `fuse_norm_quant`) |
+| Fusion | `FUSE_PASSES=ar,norm` |
 | Attention/MoE | TP3 head pad **64→66** · MoE w2 lane-rows G=16 · SwiGLU-fused w13 |
-| Cold-path knobs | `GLM_MOE_AQLM_CB=l1` · `GLM_MOE_AQLM_STREAM=1` · `GLM_NVFP4_STREAM=1` (K1/K2, bit-exact, baked into the image) |
+| Cold-path knobs | `GLM_MOE_AQLM_CB=l1` · `GLM_MOE_AQLM_STREAM=1` · `GLM_NVFP4_STREAM=1` |
 | Quant extras | fp8 W8A16 on o_proj/shared experts (`VLLM_DISABLE_FP8_W8A16=0`) |
-| Indexer | `HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}` (reaches `text_config` via the v4 passthrough fix) |
+| Indexer | `HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}` |
 | API | `:8888` — OpenAI `/v1/chat/completions` **and** Anthropic `/v1/messages` |
 
-**Text-only 380k variant** (same image, wrapper dormant ≡ `:k12l1` exactly): swap in the text config set, `KV_CACHE_MEMORY_BYTES=12884901888` (12 GiB), `MAX_MODEL_LEN=380928` → pool **386,688**.
-
-Warm single-stream decode on this AQLM+TP3 stack (content-dependent), measured 2026-07-26 boot-matched on the live **VISION** recipe:
-
-| | Approx. tok/s |
-|--|----------------|
-| Structured | **~21** |
-| Mixed (real interactive use) | **~13.6-19** (context-dependent) |
-
-Optional A/B: `fp8_ds_mla` can trade some KV pool for decode experiments; the published recipe stays on **`nvfp4_ds_mla`**.
+**Text-only 380k variant** (nvfp4 path only; same image, wrapper dormant ≡ `:k12l1`): swap in the text config set, `KV_CACHE_MEMORY_BYTES=12884901888` (12 GiB), `MAX_MODEL_LEN=380928` → pool **386,688**. Use `./start.sh` + `.env`, not the fp8 path.
 
 ### **VISION** (glm5v) — the headline of **v4**, full text speed
 
@@ -143,9 +169,18 @@ By default, workers link weights under `$HOME/models/hf` on the remote account.
 
 ## Quick start
 
+Choose a path first (see **[Two serve paths](#two-serve-paths-nvfp4-vs-fp8-kv)**):
+
+| Path | Copy | Run with |
+|------|------|----------|
+| **A — max context** (~348k, ~21 structured tok/s) | `cp .env.example .env` | `./start.sh` |
+| **B — coding speed** (~235k, ~25 structured tok/s) | `cp .env.fp8.example .env.fp8` | `./start_fp8.sh` |
+
 ```bash
 git clone https://github.com/MiaAI-Lab/GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks.git glm52
 cd glm52
+
+# Path A (default) — or use .env.fp8.example → .env.fp8 for path B
 cp .env.example .env
 # edit IPs, WORKER_USER, paths, fabric NICs
 
@@ -169,17 +204,18 @@ docker pull ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:latest
 ./start.sh ray
 ./start.sh serve
 # Equivalent: ./start.sh   (default command is serve)
+# Path B: use ./start_fp8.sh ray && ./start_fp8.sh serve instead
 
-# 4) Probe (uses PORT from .env, default 8888 in .env.example)
+# 4) Probe (uses PORT from the active env, default 8888)
 ./start.sh smoke
 curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
-# Stop
+# Stop (shared for both paths)
 ./stop.sh
 # UNMOUNT=1 ./stop.sh    # also drop SSHFS mounts if you used ./start.sh mount
 ```
 
-`./start.sh` / `./start.sh serve` will **doctor**, download/sync if weights are missing, **pull** the image if it is missing locally, start **Ray** (unless `SKIP_RAY=1`), then launch vLLM. Prefer the **GHCR image** above; `./start.sh build` is only needed if you rebuild from source.
+`./start.sh` / `./start_fp8.sh` (with `serve`) will **doctor**, download/sync if weights are missing, **pull** the image if it is missing locally, start **Ray** (unless `SKIP_RAY=1`), then launch vLLM. Prefer the **GHCR image** above; `… build` is only needed if you rebuild from source.
 
 ### Docker image (GHCR)
 
@@ -196,7 +232,7 @@ curl -s "http://127.0.0.1:${PORT:-8888}/v1/models" | jq .
 
 Package and git repo are **public**. Anonymous `docker pull` works; `docker login ghcr.io` is optional.
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full v3 / v4 release notes.
+See [CHANGELOG.md](./CHANGELOG.md) for the full release notes (v4.5 dual KV paths, v4 VISION, v3 k12l1).
 
 ### What's new in v4 (`:k12l1-vision`) — **VISION** support
 
@@ -231,9 +267,16 @@ IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision
 
 Then `./start.sh pull` copies that image to the workers (docker save/rsync/load). Default `pull` does **not** hit the registry on workers — it saves/loads from the head. Set `PULL_FROM_REGISTRY=1` only if every node can pull the same `IMAGE` ref itself.
 
-## Configuration (`.env`)
+## Configuration
 
-Copy [`.env.example`](.env.example). Important knobs:
+Two env templates — **one active file per path** (never commit local secrets):
+
+| Path | Template | Local file (gitignored) | Loaded by |
+|------|----------|-------------------------|-----------|
+| Max context (nvfp4) | [`.env.example`](.env.example) | `.env` | `./start.sh` |
+| Coding speed (fp8) | [`.env.fp8.example`](.env.fp8.example) | `.env.fp8` | `./start_fp8.sh` |
+
+Important knobs (both files; values differ by recipe):
 
 | Variable | Purpose |
 |----------|---------|
@@ -244,31 +287,33 @@ Copy [`.env.example`](.env.example). Important knobs:
 | `IMAGE` | Docker image (`ghcr.io/...` or local tag) |
 | `HF_REPO` / `MODEL_DIR` | Checkpoint source and local path |
 | `TP_SIZE=3` `DCP_SIZE=1` | Keep DCP=1 on this sparse-MLA path |
-| `KV_CACHE_DTYPE` | `nvfp4_ds_mla` (max ctx) or `fp8_ds_mla` (faster decode) |
-| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (`11811160064` = 11 GiB → pool 354,496; text-only variant 12 GiB → 386,688) |
-| `MAX_MODEL_LEN` | Per-request context cap; set ≈ pool size for 1× concurrency |
+| `KV_CACHE_DTYPE` | **`nvfp4_ds_mla`** (path A) or **`fp8_ds_mla`** (path B) |
+| `KV_CACHE_MEMORY_BYTES` | Fixed KV budget (11 GiB / 12 GiB — see path table above) |
+| `MAX_MODEL_LEN` | Per-request context cap; set ≤ pool for ≥1× concurrency |
+| `GPU_MEM_UTIL` | Overall mem util (0.895 nvfp4 / 0.9 fp8); pool size is set by the pin |
 | `ENABLE_MTP` / `MTP_SPEC_TOKENS` | In-checkpoint MTP speculative decode (default path) |
 | `ENABLE_DSPARK` / `DSPARK_*` | External DSpark draft (see below); mutually exclusive with MTP |
 | `CUDAGRAPH_MODE` / `CUDAGRAPH_CAPTURE_SIZES` | FULL graphs + capture list |
-| `FUSE_PASSES` | e.g. `ar` → `fuse_allreduce_rms` |
+| `FUSE_PASSES` | e.g. `ar,norm` |
 | `NCCL_*` / `IB_HCA` / `GLOO_SOCKET_IFNAME` | Fabric tuning |
 
-### Current recipe (MTP) — **v4 VISION**
+### Path A recipe (MTP) — **nvfp4 max context** · `./start.sh`
 
 ```bash
-IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision  # == :latest (local tag glm52-aqlm-sm121-baked:20260724-k12l1-vision)
-HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca  # VISION-era main (glm5v config set)
-MM_ENCODER_TP_MODE=data               # REQUIRED for the VISION tower at TP3
+IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision  # == :latest
+HF_REVISION=53e0082eedebd806b63e19779c47905937d768ca
+MM_ENCODER_TP_MODE=data
 KV_CACHE_DTYPE=nvfp4_ds_mla
 KV_CACHE_MEMORY_BYTES=11811160064     # 11 GiB
-MAX_MODEL_LEN=348160                  # pool now exceeds it (~1.02×)
+MAX_MODEL_LEN=348160                  # pool ~354,496 (~1.02×)
+GPU_MEM_UTIL=0.895
 MAX_NUM_SEQS=1
 ENABLE_MTP=1
 ENABLE_DSPARK=0
 MTP_SPEC_TOKENS=3
 CUDAGRAPH_MODE=FULL
 FUSE_PASSES=ar,norm
-VLLM_DISABLE_FP8_W8A16=0            # fp8 on o_proj/shared experts
+VLLM_DISABLE_FP8_W8A16=0
 HF_OVERRIDES={"num_experts_per_tok":4,"index_topk_freq":8}
 ```
 
@@ -279,25 +324,42 @@ GPU KV cache size: 354,496 tokens
 Maximum concurrency for 348,160 tokens per request: 1.02x
 ```
 
+### Path B recipe (MTP) — **fp8 coding speed** · `./start_fp8.sh`
+
+```bash
+# same IMAGE / HF_REVISION / MM_ENCODER_TP_MODE / MTP / graphs / HF_OVERRIDES as path A
+KV_CACHE_DTYPE=fp8_ds_mla
+KV_CACHE_MEMORY_BYTES=12884901888     # 12 GiB
+MAX_MODEL_LEN=235392                  # pool ~240,640 (~1.02×)
+GPU_MEM_UTIL=0.9
+```
+
+After boot, confirm:
+
+```text
+GPU KV cache size: 240,640 tokens   # approx; confirm on your boot
+Maximum concurrency for 235,392 tokens per request: ≥1.0x
+```
+
 If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl stop earlyoom` on all nodes) before blaming GPU OOM — see **Disable earlyoom** above.
 
 ### Client settings (OpenAI-compatible UIs)
 
 vLLM does **not** enforce a fixed completion length by itself. Chat apps send `max_tokens` / `max_completion_tokens`. If that budget is too small (especially with GLM **thinking** on), you get truncated replies such as *“Model stopped because it reached the maximum output token limit”*.
 
-Point the client at the head API and match the serve recipe:
+Point the client at the head API and match **whichever path you booted**:
 
-| Setting | Recommended | Notes |
-|---------|-------------|--------|
-| Base URL | `http://<head-ip>:8888/v1` | OpenAI-compatible; `PORT` from `.env` |
-| Model id | `glm-5.2` | `SERVED_MODEL_NAME` |
-| API key | any non-empty string (e.g. `dummy`) | Auth is off on this stack |
-| Context window | **348160** | Must match `MAX_MODEL_LEN` (not the slightly larger KV pool); text-only 380k variant: 380928 |
-| Max output tokens | **348160** | Match `MAX_MODEL_LEN`; keep `prompt + max_tokens ≤ 348160`; thinking counts toward this budget |
-| Reasoning / thinking | on if the client supports it | Thinking tokens count toward the **output** budget; keep any explicit thinking budget **well below** `max_tokens` (ZCode's `budget_tokens: 32000` with `max_tokens: 32001` starves the reply → "model returned no content") |
-| Image input | enable / vision-capable | Clients that don't know the model is multimodal silently strip attachments (`[Media omitted …]`) |
+| Setting | Path A (nvfp4) | Path B (fp8) | Notes |
+|---------|----------------|--------------|--------|
+| Base URL | `http://<head-ip>:8888/v1` | same | `PORT` from the active env |
+| Model id | `glm-5.2` | same | `SERVED_MODEL_NAME` |
+| API key | any non-empty (e.g. `dummy`) | same | Auth is off on this stack |
+| Context window | **348160** (text: 380928) | **235392** | Must match `MAX_MODEL_LEN` |
+| Max output tokens | same as context | same as context | Keep `prompt + max_tokens ≤ MAX_MODEL_LEN`; thinking counts toward output |
+| Reasoning / thinking | on if supported | same | Keep thinking budget **well below** `max_tokens` |
+| Image input | vision-capable | same | Clients that don't mark vision strip attachments |
 
-Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
+Example **pi agent** entry for path A (348k); for path B set `contextWindow` / `maxTokens` to **235392** and rename accordingly:
 
 ```json
 {
@@ -316,8 +378,6 @@ Example entry for **pi agent** (`~/.pi/agent/models.json`-style configs):
 ```
 
 Provider block: `baseUrl` `http://127.0.0.1:8888/v1`, `api` `openai-completions`, `auth` `none`. Reload/restart the client after changing these values.
-
-If you lower `MAX_MODEL_LEN` (e.g. DSpark @ 150k), lower the client `contextWindow` to match and keep max output well under that.
 
 ### DSpark speculative decode (optional)
 
@@ -383,51 +443,48 @@ MAX_MODEL_LEN=150000
 MAX_NUM_SEQS=1
 ```
 
-### Safer / faster variants
+### Other variants
 
 | Goal | Change |
 |------|--------|
-| **Coding speed (fp8 path)** | `cp .env.fp8.example .env.fp8` then `./start_fp8.sh ray && ./start_fp8.sh serve` |
-| More decode tok/s, less ctx (manual) | `KV_CACHE_DTYPE=fp8_ds_mla`, 12 GiB pin, `MAX_MODEL_LEN=235392` |
-| Safer RAM | 8–10 GiB pin, maxlen ≈ new pool |
-| Max context | MTP on, DSpark off, 11 GiB + 348k (**VISION**) or 12 GiB + ~380k (text-only) — `./start.sh` + `.env` |
-| Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (not when toggling DSpark mounts) |
+| Safer RAM | 8–10 GiB pin, maxlen ≈ new pool (either path) |
+| Skip Ray recreate after serve-only edits | `SKIP_RAY=1 ./start.sh serve` (or `./start_fp8.sh serve`; not when toggling DSpark mounts) |
 
-**fp8 coding path** (same image; separate env + launcher): structured decode ~**25** tok/s vs ~**21** on nvfp4 (this fleet), context **~235k** (pool ~240k @ 12 GiB). 40k long-ctx probe coherent. Do not run both serves on the same `PORT`.
-
-```bash
-cp .env.fp8.example .env.fp8   # first time; edit cluster secrets
-./start_fp8.sh ray && ./start_fp8.sh serve
-./start_fp8.sh smoke
-```
+For the main **max-ctx vs coding-speed** choice, see **[Two serve paths](#two-serve-paths-nvfp4-vs-fp8-kv)** above.
 
 ## Commands
 
 | Command | Action |
 |---------|--------|
-| `./start.sh doctor` | SSH, Docker, GPU, checkpoint checks |
-| `./start.sh build` | Clone/build fork image (`Dockerfile.glm52-sm121`) |
-| `./start.sh pull` | Distribute image to workers |
-| `./start.sh download` | `hf download` target checkpoint on head |
-| `./start.sh sync` | rsync target weights to workers |
-| `./start.sh sync_dspark` | rsync DSpark draft to workers |
-| `./start.sh ray` | Start Ray head + 2 worker containers |
-| `./start.sh serve` | Launch `vllm serve` in the head container (default if no args) |
-| `./start_fp8.sh …` | Same subcommands as `start.sh`, but loads **`.env.fp8`** (fp8 coding recipe) |
-| `./start.sh status` | What’s running |
-| `./start.sh smoke` | Short coherence probe against `PORT` |
+| **`./start.sh …`** | **Path A (nvfp4)** — loads **`.env`** |
+| **`./start_fp8.sh …`** | **Path B (fp8)** — loads **`.env.fp8`** |
+| `… doctor` | SSH, Docker, GPU, checkpoint checks |
+| `… build` | Clone/build fork image (`Dockerfile.glm52-sm121`) |
+| `… pull` | Distribute image to workers |
+| `… download` | `hf download` target checkpoint on head |
+| `… sync` | rsync target weights to workers |
+| `… sync_dspark` | rsync DSpark draft to workers |
+| `… ray` | Start Ray head + 2 worker containers |
+| `… serve` | Launch `vllm serve` in the head container (default if no args) |
+| `… status` | What’s running |
+| `… smoke` | Short coherence probe against `PORT` |
 | `./stop.sh` | Tear down serve + Ray containers (`UNMOUNT=1` also drops SSHFS mounts) |
 
 ## What is in this repo
 
 Only the ops surface needed to run and stop the stack:
 
-- `start.sh` / `start_fp8.sh` / `stop.sh`
-- `scripts/remote.py` (SSH helper)
-- `.env.example` / `.env.fp8.example`
-- this README
+| File | Role |
+|------|------|
+| `start.sh` | Path A launcher (nvfp4 max context) |
+| `start_fp8.sh` | Path B launcher (fp8 coding speed) |
+| `stop.sh` | Shared teardown |
+| `.env.example` | Path A template → copy to `.env` |
+| `.env.fp8.example` | Path B template → copy to `.env.fp8` |
+| `scripts/remote.py` | SSH helper |
+| `README.md` / `CHANGELOG.md` | Docs |
 
-Clone the vLLM fork separately (see `VLLM_FORK_*` in `.env`), or pull the GHCR image. Weights, Docker images, and local `.env` stay on your machines (gitignored).
+Clone the vLLM fork separately (see `VLLM_FORK_*` in the env template), or pull the GHCR image. Weights, Docker images, and local `.env` / `.env.fp8` stay on your machines (gitignored).
 
 Local experiment / port / handoff material (if present on a development checkout) lives under **`dev/`** — see `dev/README.md`. It is **not** required to serve and is gitignored.
 

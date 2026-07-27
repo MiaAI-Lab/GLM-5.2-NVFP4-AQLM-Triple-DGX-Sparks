@@ -2,16 +2,45 @@
 
 All notable releases of this ops recipe (images, default serve knobs, and docs) are listed here.
 
-## [v4.1] — 2026-07-26 — fp8 coding-speed path
+## [v4.5] — 2026-07-27 — dual KV paths (nvfp4 max-ctx + fp8 coding speed)
+
+**Headline:** two first-class serve recipes on the same **VISION** image (`:k12l1-vision` / `:latest`). No new Docker bake required.
 
 ### Added
 
-- **`start_fp8.sh` + `.env.fp8.example`** — optional serve path: `KV_CACHE_DTYPE=fp8_ds_mla`, 12 GiB pin, `MAX_MODEL_LEN=235392`, `GPU_MEM_UTIL=0.9`. Same image as v4; default remains nvfp4 max-ctx via `./start.sh`.
-- Measured on this fleet (warm≥5 c1): structured **~25** / mixed **~15.5** tok/s; pool **~240k**; 40k long-ctx probe coherent.
+- **Path A — max context (default):** `./start.sh` + `.env` (from `.env.example`)  
+  - `KV_CACHE_DTYPE=nvfp4_ds_mla` · 11 GiB pin · `MAX_MODEL_LEN=348160` (vision) / 380928 (text-only config swap)  
+  - Structured **~21** tok/s · mixed **~13.6–19** tok/s  
+  - KV pool **354,496** (vision) / **386,688** (text)
+
+- **Path B — coding speed:** `./start_fp8.sh` + `.env.fp8` (from `.env.fp8.example`)  
+  - `KV_CACHE_DTYPE=fp8_ds_mla` · 12 GiB pin · `MAX_MODEL_LEN=235392` · `GPU_MEM_UTIL=0.9`  
+  - Structured **~25** tok/s (~**+20%** vs path A) · mixed **~15.5** tok/s  
+  - KV pool **~240,640** (measured); 40k long-ctx probe coherent  
+  - `start_fp8.sh` is a full launcher copy that sources **`.env.fp8` only** (never `.env`)
+
+- **Docs:** README leads with a side-by-side path table (launcher, env, KV dtype, context, decode tok/s); quick start, config recipes, client settings, and commands updated for both paths.
+
+### Unchanged
+
+- Image tag still **`:k12l1-vision`** (= `:latest`); same weights, MTP-3, graphs, MoE knobs, vision stack as v4.  
+- Tear-down remains **`./stop.sh`** (shared). Do not run both serves on the same `PORT`.
 
 ```bash
+# Path A — max context
+cp .env.example .env && ./start.sh ray && ./start.sh serve
+
+# Path B — coding speed
 cp .env.fp8.example .env.fp8 && ./start_fp8.sh ray && ./start_fp8.sh serve
 ```
+
+| | Path A (nvfp4) | Path B (fp8) |
+|--|----------------|--------------|
+| Launcher | `./start.sh` | `./start_fp8.sh` |
+| Env | `.env` | `.env.fp8` |
+| Context | ~348k / ~380k | ~235k |
+| Structured tok/s | ~21 | ~25 |
+| Mixed tok/s | ~13.6–19 | ~15.5 |
 
 ---
 
