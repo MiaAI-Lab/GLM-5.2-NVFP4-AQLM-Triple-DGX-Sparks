@@ -1,5 +1,12 @@
 # GLM-5.2 NVFP4+AQLM on 3× DGX Sparks • **VISION** · two KV recipes
 
+<p align="center">
+  <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
+  <br><br>
+  <a href="https://ko-fi.com/Z8Z3SPLOD" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Buy Me a Coffee at ko-fi.com" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
+  <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
+</p>
+
 **Release v4.5** — same **VISION** image (`:k12l1-vision`), two serve paths with **separate launchers and env files**:
 
 | Path | Launcher | Env | KV cache | Context | Structured decode | Mixed decode |
@@ -8,13 +15,6 @@
 | **Coding speed** | `./start_fp8.sh` | `.env.fp8` ← [`.env.fp8.example`](.env.fp8.example) | **`fp8_ds_mla`** | **~235k** | **~25** tok/s | **~15.5–21** tok/s |
 
 Same Docker image, weights, and cluster. Pick one path, don’t run both on the same `PORT`. Text-only 380k remains a **config swap** on the nvfp4 path (same image).
-
-<p align="center">
-  <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
-  <br><br>
-  <a href="https://ko-fi.com/Z8Z3SPLOD" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Buy Me a Coffee at ko-fi.com" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
-  <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
-</p>
 
 Serve [jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid](https://huggingface.co/jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid) (~272 GB text + ~1 GB **vision** on disk) with a **VISION-enabled** build of [jarrelscy/vllm-glm52-sm120](https://github.com/jarrelscy/vllm-glm52-sm120) on **three NVIDIA DGX Spark** nodes (GB10 / sm_121 / aarch64) over RoCE. **Text + image input**: the checkpoint's current revision adds a `glm5v` **VISION** build (MoonViT tower + patch-merger projector grafted onto the unchanged text backbone).
 
