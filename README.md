@@ -12,7 +12,7 @@
 | Path | Launcher | Env | KV cache | Context | Structured decode | Mixed decode |
 |------|----------|-----|----------|---------|-------------------|--------------|
 | **Max context (default)** | `./start.sh` | `.env` ← [`.env.example`](.env.example) | **`nvfp4_ds_mla`** | **~348k** (vision) / **~380k** (text) | **~21** tok/s | **~13.6–19** tok/s |
-| **Coding speed** | `./start_fp8.sh` | `.env.fp8` ← [`.env.fp8.example`](.env.fp8.example) | **`fp8_ds_mla`** | **~235k** | **~25** tok/s | **~15.5–21** tok/s |
+| **Coding speed** | `./start_fp8.sh` | `.env.fp8` ← [`.env.fp8.example`](.env.fp8.example) | **`fp8_ds_mla`** | **~235k** | **~25–26** tok/s | **~15.5–21** tok/s |
 
 Same Docker image, weights, and cluster. Pick one path, don’t run both on the same `PORT`. Text-only 380k remains a **config swap** on the nvfp4 path (same image).
 
@@ -34,7 +34,7 @@ Both paths share the **same** image (`:k12l1-vision`), checkpoint, MTP-3, graphs
 | **KV pool** | **354,496** (vision) / **386,688** (text) | **~240,640** (measured) |
 | **`MAX_MODEL_LEN`** | **348160** / **380928** | **235392** |
 | **`GPU_MEM_UTIL`** | 0.895 | 0.9 |
-| **Structured decode** (code-like; warm≥5 c1) | **~21** tok/s | **~25** tok/s (~**+20%**) |
+| **Structured decode** (code-like; warm≥5 c1) | **~21** tok/s | **~25–26** tok/s (~**+20%**) |
 | **Mixed decode** (prose / chat) | **~13.6–19** tok/s | **~15.5–21** tok/s |
 | **Short-prompt TTFT** | ~0.9–1.0 s | ~0.7–0.8 s |
 | **40k long-ctx probe** | coherent | coherent |
@@ -174,7 +174,7 @@ Choose a path first (see **[Two serve paths](#two-serve-paths-nvfp4-vs-fp8-kv)**
 | Path | Copy | Run with |
 |------|------|----------|
 | **A — max context** (~348k, ~21 structured tok/s) | `cp .env.example .env` | `./start.sh` |
-| **B — coding speed** (~235k, ~25 structured tok/s) | `cp .env.fp8.example .env.fp8` | `./start_fp8.sh` |
+| **B — coding speed** (~235k, ~25–26 structured tok/s) | `cp .env.fp8.example .env.fp8` | `./start_fp8.sh` |
 
 ```bash
 git clone https://github.com/MiaAI-Lab/GLM-5.2-NVFP4-AQLM-Triple-DGX-Sparks.git glm52

@@ -15,7 +15,7 @@ All notable releases of this ops recipe (images, default serve knobs, and docs) 
 
 - **Path B — coding speed:** `./start_fp8.sh` + `.env.fp8` (from `.env.fp8.example`)  
   - `KV_CACHE_DTYPE=fp8_ds_mla` · 12 GiB pin · `MAX_MODEL_LEN=235392` · `GPU_MEM_UTIL=0.9`  
-  - Structured **~25** tok/s (~**+20%** vs path A) · mixed **~15.5–21** tok/s  
+  - Structured **~25–26** tok/s (~**+20%** vs path A) · mixed **~15.5–21** tok/s  
   - KV pool **~240,640** (measured); 40k long-ctx probe coherent  
   - `start_fp8.sh` is a full launcher copy that sources **`.env.fp8` only** (never `.env`)
 
@@ -39,7 +39,7 @@ cp .env.fp8.example .env.fp8 && ./start_fp8.sh ray && ./start_fp8.sh serve
 | Launcher | `./start.sh` | `./start_fp8.sh` |
 | Env | `.env` | `.env.fp8` |
 | Context | ~348k / ~380k | ~235k |
-| Structured tok/s | ~21 | ~25 |
+| Structured tok/s | ~21 | ~25–26 |
 | Mixed tok/s | ~13.6–19 | ~15.5–21 |
 
 ---
