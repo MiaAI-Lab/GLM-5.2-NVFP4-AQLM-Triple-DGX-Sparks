@@ -90,7 +90,7 @@ IMAGE=ghcr.io/miaai-lab/glm-5.2-nvfp4-triple-dgx-sparks:k12l1-vision   # == :lat
 
 **The 2026-07-25 `:vision` build was ~20% slower on text decode — root-caused and fixed in v4.** Flat `--hf-overrides` keys land on the top-level `glm5v` wrapper config, and `num_experts_per_tok:4` never propagated to the nested `text_config` the MoE actually reads → the **vision** stack silently ran the MoE at **top-8 instead of top-4** (~2× routed-expert traffic; acceptance unchanged, hiding it). The fixed image adds one passthrough property. Measured on the fixed build + **VISION** config (boot-matched, warm≥5, r1+r2): structured **21.0/20.9**, mixed **13.7/13.6**, ttft **~0.9–1.0s** — text-recipe parity. Gates: single-image smoke exact (red square / white circle), 40k long-ctx probe coherent. **Do not use the old `:20260725-vision` pin** (top-8 bug).
 
-Verified on this fleet (2026-07-26): `Multi-modal warmup completed`, KV pool 354,496 tokens, **image prompts** answered via both API shapes. Client-side gotchas (both bitten in practice): **mark the model vision-capable in your chat client** — clients like ZCode silently strip the attachment otherwise (`[Media omitted from provider request because the selected model does not support image input]`) and the model then truthfully says it can't see anything; and **keep the thinking budget well below `max_tokens`** — e.g. ZCode's `budget_tokens: 32000` with `max_tokens: 32001` leaves ~1 token for the reply and surfaces as "model returned no content".
+Verified on this fleet (2026-07-26): `Multi-modal warmup completed`, KV pool 354,496 tokens, **image prompts** answered via both API shapes. Client-side gotchas (both bitten in practice): **mark the model vision-capable in your chat client** — clients like ZCode silently strip the attachment otherwise (`[Media omitted from provider request because the selected model does not support image input]`) and the model then truthfully says it can't see anything; and if you *do* enable thinking, **keep the thinking budget well below `max_tokens`** — e.g. ZCode's `budget_tokens: 32000` with `max_tokens: 32001` leaves ~1 token for the reply and surfaces as "model returned no content". Prefer thinking **off** (the server default) — GLM 5.2 tends to over-think.
 
 Switching between **VISION** and text-only is a **config swap only** (same image): swap `config.json` / `chat_template.jinja` / `model.safetensors.index.json` on all 3 nodes + restart. Details: `dev/docs/GLM-5.2-Vision-report.md` + `dev/docs/GLM-5.2-Vision-Tech-Guide.md`; root-cause write-up and A/B numbers: `dev/docs/SPEED-IMPROVEMENTS.md` §0 "VISION-REGRESSION RESOLVED". Not covered here: the card's 950K + LMCache path (`UTIL=0.96`) — untested on this fleet.
 
@@ -347,6 +347,8 @@ If FULL capture dies with worker SIGTERM, check `earlyoom` first (`systemctl sto
 
 vLLM does **not** enforce a fixed completion length by itself. Chat apps send `max_tokens` / `max_completion_tokens`. If that budget is too small (especially with GLM **thinking** on), you get truncated replies such as *“Model stopped because it reached the maximum output token limit”*.
 
+**Thinking / reasoning: leave it off.** GLM 5.2 tends to produce long thinking traces that burn output budget and slow replies; this stack defaults thinking **off** (`--default-chat-template-kwargs '{"enable_thinking":false}'` plus a matching chat-template default). Prefer staying with that for IDE / agent use. Only turn thinking on for hard multi-step problems, and keep any thinking budget **well below** `max_tokens`. To re-enable per request: `"chat_template_kwargs": {"enable_thinking": true}`.
+
 Point the client at the head API and match **whichever path you booted**:
 
 | Setting | Path A (nvfp4) | Path B (fp8) | Notes |
@@ -356,7 +358,7 @@ Point the client at the head API and match **whichever path you booted**:
 | API key | any non-empty (e.g. `dummy`) | same | Auth is off on this stack |
 | Context window | **348160** (text: 380928) | **235392** | Must match `MAX_MODEL_LEN` |
 | Max output tokens | same as context | same as context | Keep `prompt + max_tokens ≤ MAX_MODEL_LEN`; thinking counts toward output |
-| Reasoning / thinking | on if supported | same | Keep thinking budget **well below** `max_tokens` |
+| Reasoning / thinking | **off** (recommended) | same | Default off on this stack; enable only when needed |
 | Image input | vision-capable | same | Clients that don't mark vision strip attachments |
 
 Example **pi agent** entry for path A (348k); for path B set `contextWindow` / `maxTokens` to **235392** and rename accordingly:
@@ -365,7 +367,7 @@ Example **pi agent** entry for path A (348k); for path B set `contextWindow` / `
 {
   "id": "glm-5.2",
   "name": "GLM 5.2 NVFP4+AQLM TP3 MTP · 348k + VISION",
-  "reasoning": true,
+  "reasoning": false,
   "input": ["text", "image"],
   "contextWindow": 348160,
   "maxTokens": 348160,

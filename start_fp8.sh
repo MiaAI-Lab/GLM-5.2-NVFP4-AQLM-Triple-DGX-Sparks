@@ -1123,6 +1123,7 @@ cmd_serve() {
       --compilation-config $(printf '%q' "$CC") \
       --enable-auto-tool-choice --tool-call-parser glm47 \
       --reasoning-parser glm45 \
+      --default-chat-template-kwargs $(printf '%q' '{"enable_thinking":false}') \
       $SPEC_FLAG $ASYNC_FLAG $HF_FLAG $KV_MEM_FLAG $MM_TP_FLAG >>/tmp/vllm-serve.log 2>&1")"
 
   info "vllm serve started in $HEAD_CTN — logging to $SERVE_LOG (container:/tmp/vllm-serve.log)"
