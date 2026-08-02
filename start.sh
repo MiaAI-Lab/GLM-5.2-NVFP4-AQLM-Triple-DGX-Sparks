@@ -162,6 +162,20 @@ warn() { echo "${YELLOW}[!]${NC} $*"; }
 err()  { echo "${RED}[x]${NC} $*" >&2; }
 die()  { err "$@"; exit 1; }
 
+# Guard: the remote checkpoint must be a pinned commit, never a moving ref.
+# Compatible pins on jarrelscy/GLM-5.2-NVFP4-AQLM-hybrid:
+#   53e0082e...  vision-default (glm5v config, 79 shards) — default above
+#   2d2ee496...  text-only hybrid (glm_moe_dsa, 77 shards) — config-swap variant
+# HF main/HEAD are moving refs: they track whatever gets uploaded (new shards, config
+# drift, model-class swaps) and would silently change the checkpoint under this stack.
+case "$HF_REVISION" in
+  ""|main|HEAD)
+    die "HF_REVISION must be a pinned commit SHA (vision 53e0082e... / text-only 2d2ee496...) — main/HEAD are moving refs";;
+esac
+if [[ ! "$HF_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  warn "HF_REVISION is not a full 40-hex commit SHA ('$HF_REVISION') — pin 53e0082e... (vision) or 2d2ee496... (text-only)"
+fi
+
 mkdir -p "$ROOT/logs"
 
 # ─── SSH helpers (multi-worker) ───────────────────────────────────────────────
