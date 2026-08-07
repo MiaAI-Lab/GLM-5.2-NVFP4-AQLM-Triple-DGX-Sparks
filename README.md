@@ -297,6 +297,87 @@ Important knobs (both files; values differ by recipe):
 | `FUSE_PASSES` | e.g. `ar,norm` |
 | `NCCL_*` / `IB_HCA` / `GLOO_SOCKET_IFNAME` | Fabric tuning |
 
+### Direct-QSFP control plane (three-node ring)
+
+When policy requires **all Spark-to-Spark serving traffic** to stay on the direct QSFP/CX7 fabric, put the Ray node IPs and worker SSH targets on that fabric in the local, ignored `.env.fp8`. Client/admin ingress to the head can use a separate private management path, but it must not become a head-to-worker or worker-to-worker fallback.
+
+A direct ring is pairwise: the selected Ray address can live on a different local NIC on each role. The launcher keeps the global socket values as defaults and supports per-role TCP-bootstrap overrides:
+
+```bash
+# Global fallback only; use role-specific values below when the topology needs them.
+GLOO_SOCKET_IFNAME=<default-interface>
+NCCL_SOCKET_IFNAME=<default-interface>
+
+# Each interface must own that role's selected HEAD_IP / WORKER*_IP.
+HEAD_GLOO_SOCKET_IFNAME=<head-qsfp-nic>
+HEAD_NCCL_SOCKET_IFNAME=<head-qsfp-nic>
+WORKER1_GLOO_SOCKET_IFNAME=<worker1-qsfp-nic>
+WORKER1_NCCL_SOCKET_IFNAME=<worker1-qsfp-nic>
+WORKER2_GLOO_SOCKET_IFNAME=<worker2-qsfp-nic>
+WORKER2_NCCL_SOCKET_IFNAME=<worker2-qsfp-nic>
+
+# Keep RoCE payload transport enabled.
+NCCL_NET=IB
+NCCL_IB_DISABLE=0
+IB_HCA=<intended-roce-hcas>
+```
+
+`start_fp8.sh` injects the appropriate role-specific values into the head and worker containers. It does **not** create routes, enable forwarding, or change host firewall policy.
+
+#### Ring requirements and preflight
+
+Before recreating Ray, every selected Ray address must reach both selected peer addresses bidirectionally. Head-to-worker pings or a standalone NCCL collective alone are insufficient; Ray/Gloo need the full control-plane mesh.
+
+```bash
+# Run on every node; substitute selected direct-QSFP addresses.
+ping -I <local-qsfp-ip> -c 1 -W 2 <peer-1-qsfp-ip>
+ping -I <local-qsfp-ip> -c 1 -W 2 <peer-2-qsfp-ip>
+ip route get <peer-1-qsfp-ip> from <local-qsfp-ip>
+ip route get <peer-2-qsfp-ip> from <local-qsfp-ip>
+```
+
+A ring normally needs narrow persistent `/32` routes for the selected non-adjacent pair. If that path transits the third node, routing and forwarding are separate gates: Docker often installs a default-drop `FORWARD` policy. Enable IP forwarding and add only two persistent accepts, scoped to the direct QSFP interfaces and exact endpoint pair in each direction. Do **not** add broad subnet forwarding, NAT, or an overlay-network fallback for inter-node traffic.
+
+Recreate Ray after changing selected addresses, routes, worker targets, or per-role bindings:
+
+```bash
+./start_fp8.sh ray && ./start_fp8.sh serve
+```
+
+Then check every layer. The launcher defaults `HEAD_CTN` to `glm52-aqlm-head` and the Ray port to `6379`; replace the values below if the local `.env.fp8` overrides them:
+
+```bash
+HEAD_CTN=glm52-aqlm-head
+# Replace this string with the selected direct-QSFP address of the Ray head.
+HEAD_IP="REPLACE_WITH_SELECTED_HEAD_QSFP_IP"
+RAY_PORT=6379
+PORT=8888
+
+curl -fsS "http://127.0.0.1:${PORT}/health"
+curl -fsS "http://127.0.0.1:${PORT}/v1/models"
+
+docker exec "$HEAD_CTN" bash -lc \
+  "cd /opt/vllm && source .venv/bin/activate && ray status --address=${HEAD_IP}:${RAY_PORT}"
+
+docker inspect "$HEAD_CTN" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E '^(HOST_IP|VLLM_HOST_IP|GLOO_SOCKET_IFNAME|NCCL_SOCKET_IFNAME|NCCL_NET)='
+```
+
+Check the same environment keys on both workers, then send a real completion. A listener, `ray status`, or container state alone does not prove inference works.
+
+#### Benchmark and deployment gotchas
+
+For a reference-comparable prefill measurement, make loopback API calls to the head with a unique nonce at byte zero, thinking disabled, non-streaming, and `max_tokens=1`. Record server-reported `prompt_tokens` and reject runs with nonzero `cached_tokens`. Prefix-cache hits, streaming first-token time, client-network time, and vLLM interval telemetry are different measurements and must not be compared as cache-free prefill.
+
+| Symptom | Likely cause | Correct response |
+|---|---|---|
+| `ibv_modify_qp ... remote GID: empty` | An unreachable/wrong address or interface was selected | Stop the launch; prove the complete route matrix and inspect each container's `HOST_IP` and socket-interface environment. Do not retry through a management overlay. |
+| Head and workers each ping, but the workers cannot communicate | Missing non-adjacent `/32` route or transit forwarding | Verify both `ip route get` directions; add only the required persistent routes and explicit forwarding accepts. |
+| A route exists but packets still fail at the transit host | Default-drop `FORWARD` policy | Add exact endpoint/interface accepts before the drop; do not open a broad subnet rule. |
+| `install: cannot stat /tmp/<payload>.sh` | Installer payload was not staged under the expected name | Stage and checksum the exact expected payload name, rerun once, then inspect the installed unit/script. The failed attempt made no durable route change. |
+
+Rollback should stop serving, remove only the installed `/32` routes and exact forwarding accepts, restore the previous local `.env.fp8`, recreate Ray, and re-run the route matrix, API completion, and cache-free benchmark gates. Do not use rollback to reintroduce an inter-node overlay path.
+
 ### Path A recipe (MTP) — **nvfp4 max context** · `./start.sh`
 
 ```bash
