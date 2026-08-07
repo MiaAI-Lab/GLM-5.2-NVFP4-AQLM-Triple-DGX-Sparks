@@ -53,6 +53,17 @@ FABRIC_IFACE="${FABRIC_IFACE:-enp1s0f1np1}"
 # bring-up fallback (set NCCL_IB_DISABLE=1 NCCL_NET=Socket in .env).
 GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enP7s7}"
 NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enP7s7}"
+# A direct QSFP ring needs an L3 control mesh, but each Spark reaches its
+# selected control IP through a different local CX7 interface. Keep the
+# historical global names as fallbacks while allowing per-node overrides.
+HEAD_GLOO_SOCKET_IFNAME="${HEAD_GLOO_SOCKET_IFNAME:-$GLOO_SOCKET_IFNAME}"
+WORKER1_GLOO_SOCKET_IFNAME="${WORKER1_GLOO_SOCKET_IFNAME:-$GLOO_SOCKET_IFNAME}"
+WORKER2_GLOO_SOCKET_IFNAME="${WORKER2_GLOO_SOCKET_IFNAME:-$GLOO_SOCKET_IFNAME}"
+HEAD_NCCL_SOCKET_IFNAME="${HEAD_NCCL_SOCKET_IFNAME:-$NCCL_SOCKET_IFNAME}"
+WORKER1_NCCL_SOCKET_IFNAME="${WORKER1_NCCL_SOCKET_IFNAME:-$NCCL_SOCKET_IFNAME}"
+WORKER2_NCCL_SOCKET_IFNAME="${WORKER2_NCCL_SOCKET_IFNAME:-$NCCL_SOCKET_IFNAME}"
+WORKER_GLOO_SOCKET_IFNAMES=("$WORKER1_GLOO_SOCKET_IFNAME" "$WORKER2_GLOO_SOCKET_IFNAME")
+WORKER_NCCL_SOCKET_IFNAMES=("$WORKER1_NCCL_SOCKET_IFNAME" "$WORKER2_NCCL_SOCKET_IFNAME")
 IB_HCA="${IB_HCA:-rocep1s0f0,rocep1s0f1}"
 NCCL_NET="${NCCL_NET:-IB}"
 NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-0}"
@@ -283,6 +294,8 @@ docker_env_args() {
   local -n _dea=$1
   local hip="$2"
   local gid="${3:-}"
+  local gloo_ifname="${4:-$GLOO_SOCKET_IFNAME}"
+  local nccl_ifname="${5:-$NCCL_SOCKET_IFNAME}"
   _dea+=(
     -e "VLLM_HOST_IP=$hip"
     -e "HOST_IP=$hip"
@@ -298,8 +311,8 @@ docker_env_args() {
     -e "NCCL_NET=$NCCL_NET"
     -e "NCCL_IB_DISABLE=$NCCL_IB_DISABLE"
     -e "NCCL_IB_HCA=$IB_HCA"
-    -e "NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME"
-    -e "GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME"
+    -e "NCCL_SOCKET_IFNAME=$nccl_ifname"
+    -e "GLOO_SOCKET_IFNAME=$gloo_ifname"
     -e "NCCL_P2P_DISABLE=$NCCL_P2P_DISABLE"
     -e "NCCL_SHM_DISABLE=$NCCL_SHM_DISABLE"
     -e "NCCL_MAX_NCHANNELS=$NCCL_MAX_NCHANNELS"
@@ -404,6 +417,8 @@ resolve_gid() {
 # Worker-side docker env fragment (same AQLM + RoCE knobs as head).
 worker_docker_env_lines() {
   local wip="$1" wgid="$2"
+  local gloo_ifname="${3:-$GLOO_SOCKET_IFNAME}"
+  local nccl_ifname="${4:-$NCCL_SOCKET_IFNAME}"
   cat <<EOF
         -e VLLM_HOST_IP=$wip -e HOST_IP=$wip \\
         -e RAY_memory_usage_threshold=0.99 -e RAY_memory_monitor_refresh_ms=0 \\
@@ -413,7 +428,7 @@ worker_docker_env_lines() {
         -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \\
         -e SAFETENSORS_FAST_GPU=1 \\
         -e NCCL_NET=$NCCL_NET -e NCCL_IB_DISABLE=$NCCL_IB_DISABLE -e NCCL_IB_HCA=$IB_HCA \\
-        -e NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME -e GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME \\
+        -e NCCL_SOCKET_IFNAME=$nccl_ifname -e GLOO_SOCKET_IFNAME=$gloo_ifname \\
         -e NCCL_P2P_DISABLE=$NCCL_P2P_DISABLE -e NCCL_SHM_DISABLE=$NCCL_SHM_DISABLE \\
         -e NCCL_MAX_NCHANNELS=$NCCL_MAX_NCHANNELS -e NCCL_MIN_NCHANNELS=$NCCL_MIN_NCHANNELS \\
         -e NCCL_BUFFSIZE=$NCCL_BUFFSIZE \\
@@ -825,7 +840,8 @@ cmd_ray() {
   info "Starting Ray head container..."
   local -a head_args=()
   docker_common_args head_args
-  docker_env_args head_args "$HEAD_IP" "$GID_HEAD"
+  docker_env_args head_args "$HEAD_IP" "$GID_HEAD" \
+    "$HEAD_GLOO_SOCKET_IFNAME" "$HEAD_NCCL_SOCKET_IFNAME"
   docker run -d --name "$HEAD_CTN" \
     --entrypoint bash \
     "${head_args[@]}" \
@@ -870,7 +886,8 @@ cmd_ray() {
         --ulimit memlock=-1:-1 --ulimit stack=67108864 \
         --device /dev/infiniband:/dev/infiniband \
         -v \"\$SRC\":/models/1m:ro \$DSPARK_VOL \$NCCL_VOL \\
-$(worker_docker_env_lines "$wip" "$wgid")
+$(worker_docker_env_lines "$wip" "$wgid" \
+  "${WORKER_GLOO_SOCKET_IFNAMES[$idx]}" "${WORKER_NCCL_SOCKET_IFNAMES[$idx]}")
         $(printf '%q' "$IMAGE") \
         -lc \"cd /opt/vllm && source .venv/bin/activate && mkdir -p '$OBJECT_SPILLING_DIR' && ray start \
           --address=$HEAD_IP:$RAY_PORT --node-ip-address=$wip \
