@@ -344,14 +344,20 @@ Recreate Ray after changing selected addresses, routes, worker targets, or per-r
 ./start_fp8.sh ray && ./start_fp8.sh serve
 ```
 
-Then check every layer:
+Then check every layer. The launcher defaults `HEAD_CTN` to `glm52-aqlm-head` and the Ray port to `6379`; replace the values below if the local `.env.fp8` overrides them:
 
 ```bash
-curl -fsS "http://127.0.0.1:${PORT:-8888}/health"
-curl -fsS "http://127.0.0.1:${PORT:-8888}/v1/models"
+HEAD_CTN=glm52-aqlm-head
+# Replace this string with the selected direct-QSFP address of the Ray head.
+HEAD_IP="REPLACE_WITH_SELECTED_HEAD_QSFP_IP"
+RAY_PORT=6379
+PORT=8888
+
+curl -fsS "http://127.0.0.1:${PORT}/health"
+curl -fsS "http://127.0.0.1:${PORT}/v1/models"
 
 docker exec "$HEAD_CTN" bash -lc \
-  'cd /opt/vllm && source .venv/bin/activate && ray status --address="$RAY_ADDRESS"'
+  "cd /opt/vllm && source .venv/bin/activate && ray status --address=${HEAD_IP}:${RAY_PORT}"
 
 docker inspect "$HEAD_CTN" --format '{{range .Config.Env}}{{println .}}{{end}}' \
   | grep -E '^(HOST_IP|VLLM_HOST_IP|GLOO_SOCKET_IFNAME|NCCL_SOCKET_IFNAME|NCCL_NET)='
